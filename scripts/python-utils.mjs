@@ -78,12 +78,16 @@ let _systemPy = null;
 export function findSystemPython() {
   if (_systemPy) return _systemPy;
   // Order: py launcher (Windows), python3, python.
+  const py = { cmd: 'py', args: ['-3', '--version'], spawnAs: 'py' };
+  const python = { cmd: 'python', args: ['--version'], spawnAs: 'python' };
+  const python3 = { cmd: 'python3', args: ['--version'], spawnAs: 'python3' };
+  // actions/setup-python puts the pinned version first on PATH and sets
+  // pythonLocation, but `py -3` ignores both and picks the newest Python on the
+  // runner. That froze the Windows backend on 3.15, whose installer keeps
+  // python3t.dll where PyInstaller can't find it, so cryptography's _rust.pyd
+  // failed to load in the bundle. On CI, use the Python the workflow asked for.
   const candidates = isWin
-    ? [
-        { cmd: 'py', args: ['-3', '--version'], spawnAs: 'py' },
-        { cmd: 'python', args: ['--version'], spawnAs: 'python' },
-        { cmd: 'python3', args: ['--version'], spawnAs: 'python3' },
-      ]
+    ? (process.env.pythonLocation ? [python, py, python3] : [py, python, python3])
     : [
         { cmd: 'python3', args: ['--version'], spawnAs: 'python3' },
         { cmd: 'python', args: ['--version'], spawnAs: 'python' },
