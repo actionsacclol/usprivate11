@@ -584,6 +584,21 @@ def position_row(slug: str, p: Any) -> Optional[dict]:
     }
 
 
+def positions_value(rows: list[dict]) -> float:
+    """What open positions (position_row) are worth in USD, at the venue's own cash
+    value. A row without one counts at its cost: the money is still in the position,
+    and leaving it out would read as a loss of all of it. An expired row is left out,
+    because its payout arrives as cash."""
+    total = 0.0
+    for row in rows:
+        raw = row.get("_raw") or {}
+        if raw.get("expired"):
+            continue
+        value = raw.get("currentValue")
+        total += float(value if value is not None else raw.get("initialValue") or 0.0)
+    return total
+
+
 def balance_view(data: Any) -> Optional[dict]:
     """{cash, portfolio} in USD from GET /v1/account/balances. Spendable cash is
     buyingPower: open orders already reserve part of currentBalance. None when

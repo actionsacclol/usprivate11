@@ -20,9 +20,9 @@ THE RAILS (vet)
       own (which can only be stricter). Queued approvals count as spent.
     * Positions. Open markets across every active agent, and per agent; shares
       per market per agent.
-    * Daily loss stop. Realised today plus open losses at the bid, every
-      agent together. Unrealised gains never offset. An unreadable book counts
-      at full cost; an unreadable live ledger refuses buys.
+    * Daily loss stop. Closes, settlements and fees realised today, every agent
+      together. Open positions count once their market closes. An unreadable
+      live ledger refuses buys.
     * Ownership. An agent sells or cancels only what IT opened: its paper book
       is its own account, and live it may sell only what its own orders
       actually FILLED (terminal_fills, by order id) — never what they asked
@@ -914,15 +914,15 @@ def _agent_books(c: dict) -> list[str]:
 
 
 async def day_loss(mode: str, c: dict) -> dict:
-    """Today's agent P&L (UTC), every agent together: realised today plus the
-    open positions at the bid. The spend cap bounds what goes OUT in a day;
-    this bounds what is LOST, which the spend cap cannot — a cheap position
-    can still go to zero.
+    """Today's agent P&L (UTC), every agent together. The stop (`lossUsd`) counts
+    what is realised today: closes, settlements and fees. Open positions are
+    still valued here for display, but a mark is not a result until the market
+    closes. So the spend cap bounds what goes OUT in a day, and this bounds what
+    has been LOST so far, which can lag what is at risk.
 
-    A position nobody bids (or whose market could not be read) counts at its
-    whole cost. Live, the agents' positions are replayed from their own fills
-    on the venue's ledger; a read that fails sets `positionsUnreadable`, and
-    the vet then refuses buys (exits are never blocked)."""
+    Live, the agents' positions are replayed from their own fills on the venue's
+    ledger; a read that fails sets `positionsUnreadable`, and the vet then refuses
+    buys (exits are never blocked)."""
     d = {"realizedUsd": 0.0, "unrealizedUsd": 0.0, "openLossUsd": 0.0,
          "unmarked": [], "unmarkedCostUsd": 0.0}
     day = today()
@@ -942,11 +942,7 @@ async def day_loss(mode: str, c: dict) -> dict:
         except Exception as e:  # noqa: BLE001
             logger.debug("mcp: live loss read failed: %s", e)
             d["positionsUnreadable"] = True
-    # Unrealised GAINS never offset anything: a profit not taken is not money
-    # that can pay for today's losses — not the realised ones, and not another
-    # position's open loss. Only each position's open LOSS counts.
-    d["lossUsd"] = round(max(0.0, -(d["realizedUsd"] - float(d.get("openLossUsd") or 0.0)
-                                    - float(d.get("unmarkedCostUsd") or 0.0))), 2)
+    d["lossUsd"] = round(max(0.0, -d["realizedUsd"]), 2)
     for k in ("realizedUsd", "unrealizedUsd", "openLossUsd", "unmarkedCostUsd"):
         d[k] = round(float(d[k]), 2)
     return d
@@ -956,8 +952,8 @@ async def _live_day_pnl(day: str) -> dict:
     """Replay every agent's own live fills (all agents together) by average
     cost; realised P&L is what was closed today, fees paid today count as
     lost, and what is still open is valued at the bid. A market that resolved
-    is valued at its payout while its close date is today, and drops out
-    after (that loss was yesterday's)."""
+    is realised at its payout while its close date is today, win or lose, and
+    drops out after (that result was yesterday's)."""
     import db
     import terminal as term
     with db.get_db() as conn:
@@ -1004,7 +1000,11 @@ async def _live_day_pnl(day: str) -> dict:
         if resolved in ("yes", "no"):
             if str(m.get("closeTime") or "")[:10] != day:
                 continue
-            bid = 100.0 if resolved == side else 0.0
+            # Paid out, so this is money, not a mark. Counted as an open loss
+            # it could only ever hurt: a settled winner offset nothing and the
+            # stop read $6.13 on a $5.71 day (2026-11-06).
+            realized += st["size"] * (100.0 if resolved == side else 0.0) / 100.0 - st["cost"]
+            continue
         elif side == "yes":
             bid = _num(m.get("bid"))
         else:
@@ -1170,6 +1170,11 @@ async def vet(args: dict, c: dict, mode: str, agent: dict, *,
         with terminal_paper.using_book(book_of(agent)):
             v.preview = await terminal_trade.preview({**req, "paper": True})
     else:
+        if req["action"] == "buy" and authed():
+            # The ticket reads a balance cached for up to a minute. An agent can
+            # buy twice inside that, so its second buy must see the first's debit.
+            import trader
+            await trader.refresh_balance(c, force=True)
         v.preview = await terminal_trade.preview({**req, "paper": False})
     pv = v.preview
     v.blockers.extend(pv.get("blockers") or [])

@@ -459,7 +459,7 @@ export function AiAgentsPage({ onNav }: { onNav?: (p: PageId) => void } = {}) {
               <Rail label="Daily loss stop"
                 hint={(() => {
                   const loss = s?.lossToday?.lossUsd ?? s?.lossTodayUsd;
-                  const base = 'Realised + open losses at the bid, per UTC day. Buys stop at the limit; exits never do.';
+                  const base = 'Realised losses per UTC day; open positions count once their market closes. Buys stop at the limit; exits never do.';
                   if (typeof loss !== 'number') return base;
                   return `Down ${fmtUsd(loss)} today. ${s?.lossToday?.positionsUnreadable
                     ? 'Live positions could not be read just now, so agent buys are paused until they can. ' : ''}${base}`;

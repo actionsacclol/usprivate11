@@ -663,8 +663,16 @@ async def _search(a: dict) -> dict:
       props={"conditionId": _CID}, required=("conditionId",), read_only=True)
 async def _get_market(a: dict) -> dict:
     import service
+    import terminal
     service._sync_terminal_offline()
-    return await service._h_terminal_market({"conditionId": _cid(a)})
+    m = await terminal.market(_cid(a), include_raw=True)
+    if not m:
+        return {"market": None}
+    # The summary leaves the venue's row out, and the settlement rules with it,
+    # so every agent told to read the rules first was handed none. A null here
+    # means the venue sent none.
+    rules = str((m.get("_raw") or {}).get("description") or "").strip()
+    return {"market": {**terminal._strip_raw(m), "rules": rules or None}}
 
 
 @tool("get_order_book", "Order book",
@@ -850,9 +858,10 @@ async def _cancel(a: dict) -> dict:
 
 @tool("close_position", "Close a position",
       "Exit (part of) a position YOU opened with one marketable fill-and-kill "
-      "at the best bid, within maxSlippageCents (default 5). size defaults to "
-      "everything you may sell there. preview_only=true prices it without "
-      "sending. Exits are never capped and never wait for approval.",
+      "limited maxSlippageCents (default 5) below the live best bid. It fills "
+      "every bid at or above that limit, best first, and kills the rest. size "
+      "defaults to everything you may sell there. preview_only=true prices it "
+      "without sending. Exits are never capped and never wait for approval.",
       props={"mode": _MODE, "conditionId": _CID, "side": _SIDE,
              "size": {"type": "number", "exclusiveMinimum": 0},
              "maxSlippageCents": {"type": "number", "minimum": 0, "maximum": 20},
@@ -898,7 +907,7 @@ async def _close(a: dict) -> dict:
                 raise Refused(pv["blockers"][0])
             req["confirmUsd"] = pv.get("proceedsUsd") or 0.0
             try:
-                res = await terminal_trade.sell_position(req, origin="ai")
+                res = await terminal_trade.sell_position(req, origin="ai", priced=pv)
             except Exception as e:  # noqa: BLE001
                 # As execute_live: the sell may or may not be on the venue.
                 # Booked 'unknown' below, so it keeps counting against the

@@ -898,8 +898,11 @@ async def day_pnl(today: str) -> dict:
         m = marks.get(cid) or {}
         payout = payout_cents(m, side)
         if payout is not None:
-            bid = payout
-        elif side == "yes":
+            # Resolved, so this is a result and not a mark. Counted as an open
+            # loss, a winner could offset nothing, as on the live side.
+            realized += st["size"] * payout / 100.0 - st["cost"]
+            continue
+        if side == "yes":
             bid = num(m.get("bid"))
         else:
             ask = num(m.get("ask"))

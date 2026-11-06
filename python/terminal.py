@@ -1575,6 +1575,15 @@ def side_touch(summary: dict, side: str) -> tuple[Optional[float], Optional[floa
     return bid, ask
 
 
+def live_touch(summary: dict, side: str) -> tuple[Optional[float], Optional[float]]:
+    """side_touch for pricing an order: (None, None) when the summary is the stash
+    market() fell back on while the gateway was parked and our feed has no fresh
+    quote either. A stashed quote can be minutes old, so the book is newer."""
+    if summary.get("metaStaleSec") is not None and not _live_quote(summary.get("yesTokenId")):
+        return None, None
+    return side_touch(summary, side)
+
+
 _MARKET_URL = re.compile(r"polymarket\.us/(?:[\w.-]+/)*([\w.-]+)", re.IGNORECASE)
 
 

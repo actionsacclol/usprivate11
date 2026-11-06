@@ -896,8 +896,17 @@ async def get_balance() -> dict:
     view = us.balance_view(data)
     if view is None:
         raise RuntimeError("balance response had no USD balance")
+    # Valued from the positions, not this reply's assetNotional: that read 0 in all
+    # 363 balance snapshots taken with positions open, so every fill looked like a
+    # loss of its whole cost. An unreadable list is None, which the balance cache
+    # answers with the last-known value.
+    try:
+        port = us.positions_value(await get_positions(strict=True))
+    except Exception as e:  # noqa: BLE001
+        logger.debug(f"positions unreadable for the portfolio value: {e}")
+        port = None
     return {"balance": int(round(view["cash"] * 100)),
-            "portfolio_value": int(round(view["portfolio"] * 100)),
+            "portfolio_value": None if port is None else int(round(port * 100)),
             "detail": us.balance_detail(data)}
 
 
@@ -1326,6 +1335,16 @@ async def place_limit_order(*, ticker: str, side: str, action: str, count: int, 
         raise LocalOrderRefusal(
             503, "Price collar: couldn't read a current price for this market. Nothing was sent.")
     why = collar_refusal(action, price * 100.0, bid, ask, collar or 0.0)
+    if why and action == "sell":
+        # The feed can be 12 seconds old and these markets move 17c in that time.
+        # Before keeping someone in a position, ask the read the CDN doesn't cache.
+        q = await get_quote(ticker, side)
+        fresh_bid = q.get("bid_cents")
+        if fresh_bid is not None:
+            age = q.get("age_sec")
+            wide = age is None or age > COLLAR_FRESH_SEC
+            why = collar_refusal(action, price * 100.0, float(fresh_bid), None,
+                                 COLLAR_CACHED_CENTS if wide else COLLAR_LIVE_CENTS)
     if why:
         raise LocalOrderRefusal(422, why)
 

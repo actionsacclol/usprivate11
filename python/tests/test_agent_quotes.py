@@ -133,7 +133,7 @@ def test_the_agents_live_loss_stop_marks_at_the_live_bid(fresh, monkeypatch):
     _restore_quotes(monkeypatch)
     _fake_gateway(monkeypatch, {"cpc-down": _quote(20, 22)})
     d = _run(mcp_rails.day_loss("live", {}))
-    assert d["lossUsd"] == 3.0, d
+    assert d["openLossUsd"] == 3.0, d
 
 
 _REAL_CLOB_QUOTES = terminal.clob_quotes

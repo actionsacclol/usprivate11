@@ -283,8 +283,8 @@ loss stop) for a first week.
   after Polymarket's fee** (default 3¢). An unknown fee is not a zero fee: the buy is refused.
 - **Caps, all agents together:** $25 per order, $100 spend per UTC day, 10 open positions (defaults; 0 =
   no cap). An agent's own caps can only be lower.
-- **Daily loss stop** ($50): losses realised today plus open losses at the bid. Gains elsewhere never
-  offset a loss, and live positions that can't be read pause buys. At the limit, agent buys stop for the
+- **Daily loss stop** ($50): what agents realised today from closes, settlements and fees. Open positions
+  don't count until their market closes, and live positions that can't be read pause buys. At the limit, agent buys stop for the
   UTC day.
 - **Ask me before each live order**, on by default. A live order waits on the AI Agents page (with a
   desktop notification) or on your paired phone (`/approve n`, `/reject n`). It is re-checked against the

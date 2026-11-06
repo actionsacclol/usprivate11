@@ -329,6 +329,70 @@ def test_a_live_quote_gets_the_tighter_collar(venue, monkeypatch):
     assert len(sent) == 1
 
 
+def test_a_stale_feed_cannot_refuse_a_sell_the_market_allows(venue, monkeypatch):
+    sent, _ = venue
+
+    async def now_47(_slug, _side):
+        return {"bid_cents": 47, "ask_cents": 49, "age_sec": 0.0}
+
+    monkeypatch.setattr(clob_ws, "quote_cents_if_fresh", lambda *_a, **_k: (72, 74))
+    monkeypatch.setattr(api, "get_quote", now_47)
+    run(_order(action="sell", price_cents=40))
+    assert len(sent) == 1
+
+
+def test_a_sell_the_uncached_read_agrees_is_too_low_stays_refused(venue, monkeypatch):
+    sent, _ = venue
+
+    async def still_72(_slug, _side):
+        return {"bid_cents": 72, "ask_cents": 74, "age_sec": 0.0}
+
+    monkeypatch.setattr(clob_ws, "quote_cents_if_fresh", lambda *_a, **_k: (72, 74))
+    monkeypatch.setattr(api, "get_quote", still_72)
+    with pytest.raises(api.LocalOrderRefusal) as e:
+        run(_order(action="sell", price_cents=40))
+    assert e.value.status == 422 and not sent
+
+
+_real_get_balance = api.get_balance    # conftest swaps it out for every test
+
+
+def _balances_and_positions(monkeypatch, positions):
+    async def fake_request(method, path, **_kw):
+        if path == "/v1/account/balances":
+            # The live account's reply: assetNotional stays 0 with positions open.
+            return {"balances": [{"currency": "USD", "buyingPower": 8.55, "assetNotional": 0}]}
+        assert path == "/v1/portfolio/positions"
+        if isinstance(positions, Exception):
+            raise positions
+        return {"positions": positions, "eof": True}
+
+    monkeypatch.setattr(auth, "credentials_present", lambda *_a: True)
+    monkeypatch.setattr(api, "_authed_request", fake_request)
+
+
+def test_the_portfolio_is_worth_what_the_positions_are_worth(monkeypatch):
+    _balances_and_positions(monkeypatch, {
+        "xrp": {"netPosition": "-5", "cost": {"value": "2.75"}, "cashValue": {"value": "1.55"}},
+        "eth": {"netPosition": "-4", "cost": {"value": "3.16"}, "cashValue": {"value": "2.88"}},
+    })
+    assert run(_real_get_balance())["portfolio_value"] == 443
+
+
+def test_a_position_with_no_cash_value_counts_at_cost_and_an_expired_one_not_at_all(monkeypatch):
+    _balances_and_positions(monkeypatch, {
+        "a": {"netPosition": "5", "cost": {"value": "2.75"}},
+        "b": {"netPosition": "5", "cost": {"value": "9"}, "cashValue": {"value": "9"}, "expired": True},
+    })
+    assert run(_real_get_balance())["portfolio_value"] == 275
+
+
+def test_unreadable_positions_are_an_unknown_portfolio_not_an_empty_one(monkeypatch):
+    _balances_and_positions(monkeypatch, RuntimeError("positions down"))
+    bal = run(_real_get_balance())
+    assert bal["balance"] == 855 and bal["portfolio_value"] is None
+
+
 def test_order_would_cross_our_own_resting_order(venue):
     sent, resting = venue
     resting.append({"id": "mine", "intent": "ORDER_INTENT_SELL_LONG", "price": {"value": "0.5"}})

@@ -1046,6 +1046,27 @@ def test_sell_proceeds_follow_the_same_rule(monkeypatch):
     assert gtc["costUsd"] == 55.15
 
 
+def test_a_stale_book_cannot_preview_a_fak_as_free(monkeypatch):
+    """The live test, 2026-11-06: the snapshot's asks sat above the limit, so the
+    preview showed $0 cost, $0 fee and $0 max loss for an order that then filled."""
+    _thin_book(monkeypatch, asks=[(87.0, 50)])
+    plain_market, plain_book = tt.term.market, tt.term.book
+
+    async def _market(cid, include_raw=False):
+        return {**await plain_market(cid, include_raw=include_raw), "ask": 79.0}
+
+    async def _book(cid, side="yes"):
+        return {**await plain_book(cid, side), "bestAsk": 87.0, "ageSec": 20.0}
+
+    monkeypatch.setattr(tt.term, "market", _market)
+    monkeypatch.setattr(tt.term, "book", _book)
+    pv = _run(tt.preview({"conditionId": "0xabc", "side": "yes", "action": "buy",
+                          "priceCents": 80, "size": 4, "orderType": "FAK"}))
+    assert pv["costUsd"] == 3.20
+    assert pv["maxLossUsd"] == 3.20
+    assert pv["crossesNow"] is True
+
+
 def test_an_unreadable_book_prices_the_whole_order_at_the_limit(monkeypatch):
     """No walk to lean on. The only safe direction to be wrong in is UP, so
     the whole size is priced at the limit rather than left at zero."""

@@ -917,7 +917,7 @@ def _slow_sells(monkeypatch):
     async def _pv(req):
         return {"blockers": [], "proceedsUsd": 2.5}
 
-    async def _sell(req, *, origin="manual"):
+    async def _sell(req, *, origin="manual", priced=None):
         await asyncio.sleep(0.05)  # the venue round trip the race lives in
         sold.append(float(req["size"]))
         return {"ok": True, "orderId": f"0xs{len(sold)}", "sentSize": req["size"],
@@ -983,7 +983,7 @@ def _sells(monkeypatch, result=None, raises=None):
         return {"blockers": [], "proceedsUsd": 2.5, "fillableSize": req.get("size"),
                 "limitCents": 45.0}
 
-    async def _sell(req, *, origin="manual"):
+    async def _sell(req, *, origin="manual", priced=None):
         sold.append(float(req["size"]))
         if raises is not None:
             raise raises
@@ -1230,13 +1230,18 @@ def _bid_at(monkeypatch, bid):
 
 def test_a_live_buy_pulls_fresh_fills_before_the_loss_stop(fresh, monkeypatch):
     """An agent GTC buy of 200 @ 50¢ filled at the venue after the last
-    reconcile, and the bid is now 10¢: down $80 against a $20 stop. Only a
-    reconcile writes that fill to the ledger the stop replays, and nothing
-    on the buy path ran one."""
+    reconcile, and its market has settled against it: down $100 against a $20
+    stop. Only a reconcile writes that fill to the ledger the stop replays, and
+    nothing on the buy path ran one."""
+    import mcp_rails
     _live(monkeypatch, mcp_daily_loss_usd=20.0, mcp_daily_spend_usd=0.0)
     sent = _no_venue(monkeypatch)
     _priced(monkeypatch)
-    _bid_at(monkeypatch, 10.0)
+
+    async def _settled(ids):
+        return [{"conditionId": c, "resolvedOutcome": "no",
+                 "closeTime": mcp_rails.today() + "T12:00:00Z"} for c in ids]
+    monkeypatch.setattr(tp.term, "_summaries_for", _settled)
     with db.get_db() as conn:
         _agent_buy(conn, oid="0xgtc", size=200, filled_shares=0, cid="0xdown")
 
@@ -1250,7 +1255,7 @@ def test_a_live_buy_pulls_fresh_fills_before_the_loss_stop(fresh, monkeypatch):
         return {"inserted": 1, "matched": 0}
     monkeypatch.setattr(tt, "reconcile_fills", _reconcile)
     res = _call("place_order", {**_BUY, "forecastId": _forecast()})
-    assert res["isError"] and "down $80.00" in _text(res), _text(res)
+    assert res["isError"] and "down $100.00" in _text(res), _text(res)
     assert sent == []
 
 
@@ -1325,9 +1330,9 @@ def test_previews_share_one_ledger_read_and_a_place_reads_it_fresh(fresh, monkey
     assert "could not be read" in json.dumps(b)
 
 
-def test_live_loss_counts_unrealised_at_the_bid_and_never_offsets(fresh, monkeypatch):
-    """Bought 10 YES at 50¢ (one agent order); the bid is now 20¢ → −$3.00.
-    Another position up $5 does not offset it."""
+def test_open_positions_are_shown_but_do_not_count_toward_the_live_stop(fresh, monkeypatch):
+    """Bought 10 YES at 50¢ (one agent order); the bid is now 20¢ → −$3.00 open.
+    Nothing has closed, so the stop has nothing to count yet."""
     import mcp_rails
     _live(monkeypatch)
     with db.get_db() as conn:
@@ -1341,7 +1346,73 @@ def test_live_loss_counts_unrealised_at_the_bid_and_never_offsets(fresh, monkeyp
     monkeypatch.setattr(tp.term, "_summaries_for", _summaries)
     d = _run(mcp_rails.day_loss("live", {}))
     assert d["unrealizedUsd"] == 2.0          # net, for display
-    assert d["lossUsd"] == 3.0, "an open gain elsewhere hid an open loss"
+    assert d["openLossUsd"] == 3.0
+    assert d["lossUsd"] == 0.0, "an open position tripped the stop before its market closed"
+
+
+def test_a_settled_winner_offsets_todays_losses_and_an_open_gain_does_not(fresh, monkeypatch):
+    """The live test, 2026-11-06: a winner that had already paid out was treated as
+    an open gain, so the stop read $6.13 on a $5.71 day. Bought 10 at 50¢ on each."""
+    import mcp_rails
+    _live(monkeypatch)
+    with db.get_db() as conn:
+        _agent_buy(conn, oid="0xb1", size=10, filled_shares=10, cid="0xlost")
+        _agent_buy(conn, oid="0xb2", size=10, filled_shares=10, cid="0xwon")
+        _agent_buy(conn, oid="0xb3", size=10, filled_shares=10, cid="0xopen")
+
+    today = mcp_rails.today() + "T12:00:00Z"
+
+    async def _summaries(ids):
+        return [{"conditionId": "0xlost", "resolvedOutcome": "no", "closeTime": today},
+                {"conditionId": "0xwon", "resolvedOutcome": "yes", "closeTime": today},
+                {"conditionId": "0xopen", "resolvedOutcome": None, "bid": 90.0, "ask": 92.0}]
+    monkeypatch.setattr(tp.term, "_summaries_for", _summaries)
+    d = _run(mcp_rails.day_loss("live", {}))
+    assert d["realizedUsd"] == 0.0            # -$5.00 lost, +$5.00 won
+    assert d["lossUsd"] == 0.0, d
+    assert d["unrealizedUsd"] == 4.0          # the open gain, for display only
+
+    async def _lost_more(ids):
+        return [{"conditionId": "0xlost", "resolvedOutcome": "no", "closeTime": today},
+                {"conditionId": "0xwon", "resolvedOutcome": "no", "closeTime": today},
+                {"conditionId": "0xopen", "resolvedOutcome": None, "bid": 90.0, "ask": 92.0}]
+    monkeypatch.setattr(tp.term, "_summaries_for", _lost_more)
+    assert _run(mcp_rails.day_loss("live", {}))["lossUsd"] == 10.0, "an open gain hid a loss"
+
+
+def test_get_market_hands_over_the_rules_text(fresh, monkeypatch):
+    import terminal
+
+    async def _market(cid, include_raw=False):
+        assert include_raw
+        return {"conditionId": cid, "title": "T", "_raw": {"description": " Settles on RTI. "}}
+    monkeypatch.setattr(terminal, "market", _market)
+    m = json.loads(_text(_call("get_market", {"conditionId": "0xabc"})))["market"]
+    assert m["rules"] == "Settles on RTI."
+    assert "_raw" not in m
+
+
+def test_a_market_with_no_rules_says_null_and_an_unreadable_one_is_null(fresh, monkeypatch):
+    import terminal
+
+    async def _market(cid, include_raw=False):
+        return {"conditionId": cid, "_raw": {}} if cid == "0xabc" else None
+    monkeypatch.setattr(terminal, "market", _market)
+    assert json.loads(_text(_call("get_market", {"conditionId": "0xabc"})))["market"]["rules"] is None
+    assert json.loads(_text(_call("get_market", {"conditionId": "0xdef"})))["market"] is None
+
+
+def test_a_second_live_buy_sees_the_first_ones_debit(fresh, monkeypatch):
+    import trader
+    _live(monkeypatch)
+    forced = []
+
+    async def _refresh(_cfg, force=False):
+        forced.append(force)
+        return 0, 0
+    monkeypatch.setattr(trader, "refresh_balance", _refresh)
+    _call("preview_order", {**_BUY, "forecastId": _forecast()})
+    assert forced == [True]
 
 
 def test_an_agent_cannot_cancel_the_users_live_order(fresh, monkeypatch):
@@ -1499,14 +1570,14 @@ def test_an_agent_cannot_wipe_its_paper_record_or_its_loss_stop(fresh, monkeypat
     _fake_service(monkeypatch, mcp_daily_loss_usd=3.0)
     _mock_book(monkeypatch)
 
-    async def _unbid(ids):
-        return [{"conditionId": i, "title": "T", "status": "open",
-                 "resolvedOutcome": None, "bid": None, "ask": 50.0, "probability": 50.0}
+    async def _lost(ids):
+        return [{"conditionId": i, "title": "T", "status": "settled", "resolvedOutcome": "no",
+                 "closeTime": "2030-01-01T00:00:00Z", "probability": 0.0}
                 for i in ids]
-    monkeypatch.setattr(tp.term, "_summaries_for", _unbid)
+    monkeypatch.setattr(tp.term, "_summaries_for", _lost)
     buy = {**_BUY, "mode": "paper", "orderType": "FAK"}
     assert not _call("place_order", {**buy, "forecastId": _forecast()})["isError"]
-    # Nobody bids it in the mock, so the open $5 counts as lost: over $3.
+    # The market settled against the buy in the mock: $5 lost, over the $3 stop.
     res = _call("place_order", {**buy, "forecastId": _forecast()})
     assert res["isError"] and "Daily loss stop" in _text(res)
 

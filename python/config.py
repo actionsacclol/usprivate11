@@ -538,7 +538,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
     # forecast must clear after Polymarket's fee.
     "mcp_max_positions": 10,
     "mcp_min_edge_cents": 3.0,
-    # Daily loss stop: realised today plus open losses at the bid, all agents.
+    # Daily loss stop: closes, settlements and fees realised today, all agents.
     # At the limit, agent BUYS stop for the UTC day; exits never do.
     "mcp_daily_loss_usd": 50.0,
     # "Ask me first": a live agent order waits for the user's approval in the

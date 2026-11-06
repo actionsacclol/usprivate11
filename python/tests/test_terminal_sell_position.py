@@ -107,11 +107,91 @@ def test_a_whole_position_that_fits_the_cap_sells_at_the_walked_average(
     assert pv["bestBidCents"] == 60.0
     # (10 × 60 + 30 × 58) / 40 = 58.5 — the walked average, not the best bid.
     assert abs(pv["estimatedAvgCents"] - 58.5) < 1e-6
-    # The limit is the DEEPEST level touched. A limit at the touch would only
-    # cross the touch, which is the resting-order bug all over again.
-    assert pv["limitCents"] == 58.0
-    assert pv["worstFillCents"] == 58.0
+    # The limit is the slippage floor. A limit at the deepest level walked is
+    # killed by the first tick the market moves, in exactly the moment that matters.
+    assert pv["limitCents"] == 55.0
+    assert pv["worstFillCents"] == 55.0
     assert abs(pv["proceedsUsd"] - 23.40) < 1e-9
+
+
+def _moved_market(monkeypatch, *, live_bid, bids, age=20.0, parked=False):
+    """The market's own bid has left the book snapshot behind."""
+    _mock_market(monkeypatch, bids=bids)
+    plain_market, plain_book = tt.term.market, tt.term.book
+
+    async def _market(cid, include_raw=False):
+        m = await plain_market(cid, include_raw=include_raw)
+        m["bid"] = live_bid
+        if parked:
+            m["metaStaleSec"] = 120.0
+        return m
+
+    async def _book(cid, side="yes"):
+        return {**await plain_book(cid, side), "ageSec": age}
+
+    monkeypatch.setattr(tt.term, "market", _market)
+    monkeypatch.setattr(tt.term, "book", _book)
+
+
+@pytest.mark.parametrize("slip, limit", [(3, 78.0), (6, 75.0)])
+def test_a_stale_book_cannot_price_an_exit(paper_db, monkeypatch, slip, limit):
+    """The live test, 2026-11-06: snapshot 87¢, market 81¢. Both 3¢ and 6¢ of
+    slippage sent a sell at 87¢, and each was killed with no fill."""
+    _moved_market(monkeypatch, live_bid=81.0, bids=[(87.0, 100)])
+    _wallet(monkeypatch, size=2.0)
+    sent = _tradable(monkeypatch)
+    pv = _run(tt.sell_position_preview(_sell(maxSlippageCents=slip)))
+    assert pv["blockers"] == []
+    assert pv["bestBidCents"] == 81.0
+    assert pv["limitCents"] == limit
+    # Priced at the worst case, and never at a bid that is no longer there.
+    assert pv["estimatedAvgCents"] == limit
+    r = _run(tt.sell_position(_sell(maxSlippageCents=slip, confirmUsd=pv["proceedsUsd"])))
+    assert r["ok"] is True, r["message"]
+    assert sent[0]["price_cents"] == limit
+
+
+def test_a_stale_book_does_not_size_the_exit(paper_db, monkeypatch):
+    # The snapshot shows 3 at the bid, but its depth is out of date. A fill-and-kill
+    # cannot rest, so everything goes and the venue says what filled.
+    _moved_market(monkeypatch, live_bid=60.0, bids=[(70.0, 3)])
+    _wallet(monkeypatch, size=40.0)
+    pv = _run(tt.sell_position_preview(_sell()))
+    assert pv["fillableSize"] == 40.0
+    assert any("out of date" in w for w in pv["warnings"]), pv["warnings"]
+
+
+def test_a_rising_market_is_not_sold_below_what_the_snapshot_missed(paper_db, monkeypatch):
+    _moved_market(monkeypatch, live_bid=72.0, bids=[(47.0, 100)])
+    _wallet(monkeypatch, size=2.0)
+    pv = _run(tt.sell_position_preview(_sell(maxSlippageCents=5)))
+    assert pv["bestBidCents"] == 72.0
+    assert pv["limitCents"] == 67.0
+
+
+def test_a_book_the_snapshot_shows_empty_can_still_be_sold(paper_db, monkeypatch):
+    _moved_market(monkeypatch, live_bid=50.0, bids=[])
+    _wallet(monkeypatch, size=2.0)
+    pv = _run(tt.sell_position_preview(_sell(maxSlippageCents=5)))
+    assert pv["blockers"] == []
+    assert pv["limitCents"] == 45.0
+
+
+def test_a_quote_from_the_parked_stash_does_not_outrank_the_book(paper_db, monkeypatch):
+    # With the gateway parked, market() answers from a stash up to 10 minutes old.
+    _moved_market(monkeypatch, live_bid=81.0, bids=[(60.0, 100)], parked=True)
+    _wallet(monkeypatch, size=2.0)
+    pv = _run(tt.sell_position_preview(_sell(maxSlippageCents=5)))
+    assert pv["bestBidCents"] == 60.0
+    assert pv["limitCents"] == 55.0
+
+
+def test_a_live_exit_stays_inside_the_price_collar(paper_db, monkeypatch):
+    # A wider limit would be refused outright by the collar, stranding the position.
+    _mock_market(monkeypatch, bids=[(80.0, 100)])
+    _wallet(monkeypatch, size=2.0)
+    pv = _run(tt.sell_position_preview(_sell(maxSlippageCents=50)))
+    assert pv["limitCents"] == 80.0 - tt.api.COLLAR_LIVE_CENTS
 
 
 def test_the_limit_never_goes_below_the_slippage_cap(paper_db, monkeypatch):
@@ -162,7 +242,7 @@ def test_the_order_is_sized_to_what_fits_so_nothing_rests(paper_db, monkeypatch)
     assert sent[0]["count"] == 10, "sent more size than the cap could absorb"
     assert sent[0]["order_type"] == "FAK"
     assert sent[0]["action"] == "sell"
-    assert sent[0]["price_cents"] == 60
+    assert sent[0]["price_cents"] == 55
     assert r["sentSize"] == 10.0
 
 
@@ -446,3 +526,14 @@ def test_the_depth_warning_fires_when_the_sell_eats_the_book(
     pv = _run(tt.sell_position_preview(_sell()))
     assert any("visible" in w and "depth" in w for w in pv["warnings"]), \
         pv["warnings"]
+
+
+def test_a_settled_paper_winner_is_a_result_not_an_open_mark(paper_db, monkeypatch):
+    """Same rule as the live loss stop: a win that has resolved offsets losses."""
+    _mock_market(monkeypatch, asks=[(50.0, 100)])
+    buy = _run(tp.place(_order(conditionId=CID, priceCents=50, size=10, orderType="FAK")))
+    assert buy["ok"] and buy["filledSize"] == 10.0
+    _mock_market(monkeypatch, asks=[(50.0, 100)], resolved="yes")
+    d = _run(tp.day_pnl("2026-11-06"))
+    assert d["realizedUsd"] == 5.0
+    assert d["unrealizedUsd"] == 0.0 and d["openLossUsd"] == 0.0

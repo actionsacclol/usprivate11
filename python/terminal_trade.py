@@ -421,7 +421,8 @@ async def preview(req: dict) -> dict:
 
     # ── walk the real book ─────────────────────────────────────────────
     bk = await term.book(cid, side)
-    live_bid, live_ask = term.side_touch(summary, side)
+    live_bid, live_ask = term.live_touch(summary, side)
+    stale = None
     if bk.get("available"):
         # The touch comes from the market read, which the CDN does not cache; the
         # book's levels can be 30 seconds behind it. Only the depth comes from the
@@ -491,11 +492,13 @@ async def preview(req: dict) -> dict:
     # A sell is the same arithmetic; the figure is proceeds, not cost.
     fillable = out["fillableSize"]
     avg = out["estimatedAvgCents"]
-    if fillable is None:
-        # The book could not be read (warned about above). With no walk to
-        # lean on, price the whole order at the limit: for a GTC that IS the
-        # worst case, and for a FAK it is an upper bound. Never an
-        # understatement, which is the direction that matters here.
+    if fillable is None or stale:
+        # The book could not be read, or the market has moved away from the
+        # snapshot (both warned about above). With no walk to lean on, price the
+        # whole order at the limit: for a GTC that IS the worst case, and for a
+        # FAK it is an upper bound. Never an understatement, which is the
+        # direction that matters here: a FAK that crosses a live ask the snapshot
+        # does not show used to preview $0 cost, $0 fee and $0 max loss, then fill.
         fill_size = req_size
         cost = round(req_size * snapped / 100.0, 2)
     else:
@@ -928,6 +931,14 @@ async def _reconcile_soon(order_id: Optional[str]) -> None:
         await reconcile_fills()
     except Exception as e:  # noqa: BLE001
         logger.debug("terminal reconcile after %s failed: %s", order_id, e)
+    # The ticket reads spendable cash from this cache, which otherwise waits out
+    # the poll interval: a minute of offering money the order just spent.
+    try:
+        import service
+        import trader
+        await trader.refresh_balance(service.STATE.cfg or {}, force=True)
+    except Exception as e:  # noqa: BLE001
+        logger.debug("balance refresh after %s failed: %s", order_id, e)
 
 
 async def cancel(order_id: str) -> dict:
@@ -1505,10 +1516,14 @@ async def flatten_wallet(*, allow_trading: bool = True, origin: str = "manual",
 #   1. It walks the real book and NEVER sends a size that would leave a
 #      resting remainder. If only part of the position fits inside your
 #      slippage cap, the preview says how many contracts fit and at what
-#      average, and the order is sized to exactly that.
-#   2. The limit is the DEEPEST level the walk touched, on the market's tick —
-#      never below `bestBid − maxSlippageCents`. So the cap is a promise about
-#      the worst price you can get, not a hint.
+#      average, and the order is sized to exactly that. When the snapshot has
+#      fallen behind the market its depth means nothing, so the whole position
+#      goes and the fill-and-kill kills whatever finds no bid.
+#   2. The limit IS `bestBid − maxSlippageCents`, on the market's tick, and the
+#      best bid is the market's live one. A fill-and-kill takes every bid at or
+#      above its limit, best first, so a low limit does not cost a good fill. A
+#      limit at the snapshot's own bid did: it sold at 87¢ into an 81¢ market and
+#      was killed, twice, with the price falling away (2026-11-06).
 #   3. Every order goes through `place()` (live) or `terminal_paper.place()`
 #      (paper). Not around them — through them, so the paper gate, the manual
 #      ceilings, the confirmation-drift check and the order log all apply.
@@ -1523,34 +1538,6 @@ _SELL_ESTIMATE_NOTE = (
     "Every figure here is an estimate off the book as it is now, not a quote. "
     "The fill you actually get depends on what is still resting when the order "
     "lands.")
-
-
-def _walk_deepest(levels: list[dict], want: float,
-                  floor_cents: float) -> Optional[float]:
-    """The deepest (lowest) bid level a sell walk of `want` actually touches.
-
-    Deliberately the same traversal as `_walk_book(..., is_buy=False)` — it
-    answers the one question that walk does not: how far down did we have to
-    go? That price, not the best bid, is what the limit has to be, because a
-    limit at the touch only crosses the touch.
-    """
-    filled = 0.0
-    deepest: Optional[float] = None
-    for lvl in levels:
-        p = lvl.get("priceCents")
-        sz = lvl.get("size")
-        if p is None or sz is None:
-            continue
-        if p < floor_cents:
-            break
-        take = min(float(sz), want - filled)
-        if take <= 0:
-            break
-        filled += take
-        deepest = float(p)
-        if filled >= want:
-            break
-    return deepest
 
 
 def _sell_blank(cid: str, side: str, paper: bool) -> dict:
@@ -1726,60 +1713,69 @@ async def sell_position_preview(req: dict) -> dict:
             f"rather than selling blind.")
         return out
     bids = bk.get("bids") or []
-    best_bid = num(bk.get("bestBid"))
-    if best_bid is None or not bids:
+    book_bid = num(bk.get("bestBid"))
+    live_bid, live_ask = term.live_touch(summary, side)
+    stale = _book_behind(bk, live_bid, live_ask)
+    # The market read is uncached and the book can be 30 seconds behind it. A
+    # snapshot that has been left behind cannot price an exit, least of all in the
+    # fast market where the exit matters.
+    lagging = live_bid is not None and (bool(stale) or book_bid is None or not bids)
+    best_bid = live_bid if lagging else book_bid
+    if best_bid is None or (not lagging and not bids):
         out["blockers"].append(
             "Nobody is bidding on this side right now, so there is nothing to "
             "sell into.")
         return out
     out["bestBidCents"] = best_bid
-    live_bid, live_ask = term.side_touch(summary, side)
-    stale = _book_behind(bk, live_bid, live_ask)
     if stale:
         out["warnings"].append(stale)
 
     # The floor is rounded UP onto the tick: rounding it DOWN would quietly hand
-    # the order a bigger slippage budget than the one the user picked.
+    # the order a bigger slippage budget than the one the user picked. A live order
+    # also has to stay inside the price collar, or the exit is refused outright.
+    reach = slip if paper else min(slip, api.COLLAR_LIVE_CENTS)
     tick_cents = float(tick) * 100.0
     floor_cents = max(tick_cents, round(
-        math.ceil((best_bid - slip) / tick_cents - 1e-9) * tick_cents, 4))
-    fillable, avg = _walk_book(bids, float(want), floor_cents, False)
-    if fillable is None:
-        out["blockers"].append(
-            "There is no book to walk on this side, so the fill cannot be "
-            "estimated. Nothing was priced.")
-        return out
+        math.ceil((best_bid - reach) / tick_cents - 1e-9) * tick_cents, 4))
+    if lagging:
+        # No depth to trust, so every contract is priced at the limit: the worst
+        # case, and the figure `preview()` reaches for the same order.
+        sell_size, avg = float(want), floor_cents
+        out["warnings"].append(
+            f"The visible depth is out of date, so all {want:g} contracts are "
+            f"priced at your {floor_cents:g}¢ limit, the worst case. The order "
+            f"takes every bid at or above it, best first, and kills the rest.")
+    else:
+        fillable, avg = _walk_book(bids, float(want), floor_cents, False)
+        if fillable is None:
+            out["blockers"].append(
+                "There is no book to walk on this side, so the fill cannot be "
+                "estimated. Nothing was priced.")
+            return out
 
-    sell_size = _floor_qty(float(fillable), min_size)
-    if sell_size <= 0:
-        out["blockers"].append(
-            f"Nothing is bidding within {slip:g}¢ of the best bid "
-            f"({best_bid:g}¢), so nothing can be sold at that tolerance. Widen "
-            f"the slippage, or wait for a bid.")
-        return out
-    if sell_size < float(fillable) - 1e-9:
-        # Re-price at the size we will actually send: the average of a smaller
-        # walk is not the average of a larger one.
-        fillable, avg = _walk_book(bids, float(sell_size), floor_cents, False)
-    deepest = _walk_deepest(bids, float(sell_size), floor_cents)
-    if avg is None or deepest is None:
-        out["blockers"].append(
-            "The book could not be walked for this size, so there is no fill "
-            "estimate. Nothing was priced.")
-        return out
+        sell_size = _floor_qty(float(fillable), min_size)
+        if sell_size <= 0:
+            out["blockers"].append(
+                f"Nothing is bidding within {slip:g}¢ of the best bid "
+                f"({best_bid:g}¢), so nothing can be sold at that tolerance. Widen "
+                f"the slippage, or wait for a bid.")
+            return out
+        if sell_size < float(fillable) - 1e-9:
+            # Re-price at the size we will actually send: the average of a smaller
+            # walk is not the average of a larger one.
+            fillable, avg = _walk_book(bids, float(sell_size), floor_cents, False)
+        if avg is None:
+            out["blockers"].append(
+                "The book could not be walked for this size, so there is no fill "
+                "estimate. Nothing was priced.")
+            return out
 
     out["fillableSize"] = float(sell_size)
     out["estimatedAvgCents"] = avg
-    # The limit is the deepest touched level. It can never sit below the slippage
-    # floor, which is itself on the tick.
-    limit_cents = round(math.floor(deepest / tick_cents + 1e-9) * tick_cents, 4)
-    limit_cents = max(tick_cents, min(100.0 - tick_cents, limit_cents))
-    if limit_cents < floor_cents:
-        limit_cents = floor_cents
-    out["limitCents"] = limit_cents
+    out["limitCents"] = floor_cents
     # Your limit IS your worst case on a marketable order: nothing can fill
     # below it, and the killed remainder costs nothing.
-    out["worstFillCents"] = limit_cents
+    out["worstFillCents"] = floor_cents
 
     if sell_size < want:
         out["warnings"].append(
@@ -1789,7 +1785,7 @@ async def sell_position_preview(req: dict) -> dict:
             f"{want - sell_size:g} stay in your position.")
 
     visible = sum(float(l.get("size") or 0.0) for l in bids)
-    if visible > 0 and sell_size / visible > _DEPTH_WARN_FRACTION:
+    if not lagging and visible > 0 and sell_size / visible > _DEPTH_WARN_FRACTION:
         out["warnings"].append(
             f"This sell eats {sell_size / visible * 100:.0f}% of the visible "
             f"bid depth. An order that size moves the book, so the real fill "
@@ -1857,16 +1853,21 @@ def _sell_refused(message: str, pv: Optional[dict] = None) -> dict:
     }
 
 
-async def sell_position(req: dict, *, origin: str = "manual") -> dict:
+async def sell_position(req: dict, *, origin: str = "manual",
+                        priced: Optional[dict] = None) -> dict:
     """Send ONE marketable fill-and-kill that closes (part of) a position.
 
     Same request as the preview, plus ``confirmUsd`` — the proceeds figure the
     user actually read. It is re-derived here and the order is refused if the
     book moved, exactly as `place()` does for the ticket: the confirmation is a
     contract about a number, not a checkbox.
+
+    ``priced`` is a preview the caller took a moment ago and is acting on with no
+    human in between (an agent's close). Pricing it again could only refuse an
+    exit over a quote that ticked between two reads nobody looked at.
     """
     paper = bool(req.get("paper"))
-    pv = await sell_position_preview(req)
+    pv = priced if priced is not None else await sell_position_preview(req)
     if pv["blockers"]:
         return _sell_refused(pv["blockers"][0], pv)
 
