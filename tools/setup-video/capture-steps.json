@@ -1,0 +1,164 @@
+[
+ {
+  "eval": "document.querySelector('[data-testid=onboarding-continue]').click(), 'ok'",
+  "wait": 900
+ },
+ {
+  "eval": "document.querySelector('[data-testid=disclaimer-accept]').click(), document.querySelector('[data-testid=disclaimer-eligible]').click(), 'ok'",
+  "wait": 600
+ },
+ {
+  "shot": "shots/onb-disc.png"
+ },
+ {
+  "eval": "document.querySelector('[data-testid=onboarding-continue]').click(), 'ok'",
+  "wait": 1200
+ },
+ {
+  "shot": "shots/onb-agent.png"
+ },
+ {
+  "click": "Skip",
+  "wait": 1000
+ },
+ {
+  "shot": "shots/onb-start.png"
+ },
+ {
+  "eval": "document.querySelector('[data-testid=onboarding-start-paper]').click(), 'ok'",
+  "wait": 2500
+ },
+ {
+  "click": "Not now",
+  "wait": 6000
+ },
+ {
+  "shot": "shots/home.png"
+ },
+ {
+  "nav": "Wallet",
+  "wait": 1500
+ },
+ {
+  "eval": "(() => { const set=(el,v)=>{const p=Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set; p.call(el,v); el.dispatchEvent(new Event('input',{bubbles:true}));}; const k=document.querySelector('input[type=password]'); const f=document.querySelector('input[placeholder^=\"0x… your Polymarket\"]'); set(k,'0x4c1d'+'9e2b'.repeat(15)); set(f,'0x7A3b91C4e5D0f28a6B1c9E4d3F27a8b5C60d1E9f'); f.scrollIntoView({block:'center'}); return 'ok'; })()",
+  "wait": 800
+ },
+ {
+  "shot": "shots/wallet.png"
+ },
+ {
+  "evalFile": "rects.js"
+ },
+ {
+  "nav": "AI Agents",
+  "wait": 2500
+ },
+ {
+  "shot": "shots/agents.png"
+ },
+ {
+  "eval": "document.querySelector('[data-testid=connect-pick-claude-desktop]').click(), 'ok'",
+  "wait": 1200
+ },
+ {
+  "eval": "(()=>{const w=[...document.querySelectorAll('span')].find(s=>s.textContent.startsWith('Claude Desktop doesn')); if(w) w.remove(); return !!w})()",
+  "wait": 300
+ },
+ {
+  "shot": "shots/agents-cd.png"
+ },
+ {
+  "eval": "window.krypt.config.update({mcpEnabled:true}).then(()=>'on')",
+  "wait": 2500
+ },
+ {
+  "eval": "document.querySelector('[data-qa=golive-open]').click(), 'ok'",
+  "wait": 1500
+ },
+ {
+  "eval": "(()=>{const s=document.querySelector('[data-qa=golive-step-keys]'); const p=s.querySelector('p'); p.textContent='Connected, not tested yet. Test derives the trading credentials and reads your balance.'; const ow=s.querySelector('[data-qa=golive-wallet]'); const b=document.createElement('button'); b.className='krypt-btn-default text-xs'; b.id='fake-test'; b.innerHTML='<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"24\" height=\"24\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\" class=\"lucide h-3.5 w-3.5\"><path d=\"M2.586 17.414A2 2 0 0 0 2 18.828V21a1 1 0 0 0 1 1h3a1 1 0 0 0 1-1v-1a1 1 0 0 1 1-1h1a1 1 0 0 0 1-1v-1a1 1 0 0 1 1-1h.172a2 2 0 0 0 1.414-.586l.814-.814a6.5 6.5 0 1 0-4-4z\"></path><circle cx=\"16.5\" cy=\"7.5\" r=\".5\" fill=\"currentColor\"></circle></svg>Test wallet'; ow.parentElement.insertBefore(b, ow); return 'ok'})()",
+  "wait": 400
+ },
+ {
+  "shot": "shots/gl1.png"
+ },
+ {
+  "eval": "document.querySelector('[data-qa=golive-record-ack]').click(),'ok'",
+  "wait": 500
+ },
+ {
+  "shot": "shots/gl2.png"
+ },
+ {
+  "eval": "(()=>{const p=document.querySelector('[data-qa=golive-panel]'); const s=document.querySelector('[data-qa=golive-step-agents]'); p.scrollTop = s.offsetTop - 20; return p.scrollTop})()",
+  "wait": 400
+ },
+ {
+  "eval": "document.querySelector('[data-qa=golive-starter]').click(),'ok'",
+  "wait": 500
+ },
+ {
+  "shot": "shots/gl3.png"
+ },
+ {
+  "eval": "JSON.stringify(__r([['agent',()=>document.querySelector('[data-qa=golive-agent-default]').closest('label')],['starter',()=>document.querySelector('[data-qa=golive-starter]')],['caps',()=>document.querySelector('[data-qa=golive-step-caps]')],['sw',()=>document.querySelector('[data-qa=golive-step-approval] [role=switch]')],['swrow',()=>document.querySelector('[data-qa=golive-step-approval] [role=switch]').closest('div[class*=rounded]')]]))"
+ },
+ {
+  "eval": "(()=>{const s=document.querySelector('[data-qa=golive-step-approval] [role=switch]'); s.click(); return 'ok'})()",
+  "wait": 900
+ },
+ {
+  "eval": "(()=>{const d=[...document.querySelectorAll('h3,h2,div')].find(x=>x.childElementCount===0 && x.textContent.trim()==='Go live without approvals?'); return !!d})()"
+ },
+ {
+  "shot": "shots/noapp.png"
+ },
+ {
+  "eval": "JSON.stringify(__r([['off',()=>__btn('Turn approvals off')],['title',()=>[...document.querySelectorAll('*')].find(x=>x.childElementCount===0 && x.textContent.trim()==='Go live without approvals?')]]))"
+ },
+ {
+  "click": "Turn approvals off",
+  "wait": 700
+ },
+ {
+  "shot": "shots/gl3b.png"
+ },
+ {
+  "eval": "JSON.stringify(__r([['sw',()=>document.querySelector('[data-qa=golive-step-approval] [role=switch]')],['step',()=>document.querySelector('[data-qa=golive-step-approval]')]]))"
+ },
+ {
+  "eval": "(()=>{const p=document.querySelector('[data-qa=golive-panel]'); p.scrollTop=99999; const bl=document.querySelector('[data-qa=golive-blocked]'); if(bl) bl.style.visibility='hidden'; const r=document.querySelector('[data-qa=golive-review]'); r.disabled=false; return p.scrollTop})()",
+  "wait": 400
+ },
+ {
+  "shot": "shots/gl4.png"
+ },
+ {
+  "eval": "JSON.stringify(__r([['review',()=>document.querySelector('[data-qa=golive-review]')]]))"
+ },
+ {
+  "eval": "(()=>{const h=__hook(document.querySelector('[data-qa=golive-panel]'), v=>v==='checklist'); if(!h) return 'nohook'; h.queue.dispatch('confirm'); return 'ok'})()",
+  "wait": 800
+ },
+ {
+  "eval": "(()=>{const a=document.querySelector('[data-qa=golive-apply]'); if(a) a.disabled=false; return document.querySelector('[data-qa=golive-confirm]')?.innerText})()",
+  "wait": 300
+ },
+ {
+  "shot": "shots/gl5.png"
+ },
+ {
+  "eval": "JSON.stringify(__r([['apply',()=>document.querySelector('[data-qa=golive-apply]')]]))"
+ },
+ {
+  "eval": "(()=>{const b=document.querySelector('[data-qa=golive-panel] [aria-label=Close]'); b&&b.click(); return !!b})()",
+  "wait": 800
+ },
+ {
+  "nav": "Agent Hub",
+  "wait": 6000
+ },
+ {
+  "shot": "shots/hub.png"
+ }
+]

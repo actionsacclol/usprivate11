@@ -1,0 +1,48 @@
+name: CI
+
+on:
+  push:
+    # release branches too: release-3.0.0 went 43 commits without a CI run
+    branches: [main, 'release-*']
+  pull_request:
+  workflow_dispatch: {}
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install Node dependencies
+        run: npm install
+
+      - name: TypeScript typecheck
+        run: npm run typecheck
+
+      - name: Renderer unit tests
+        run: npm run test:unit
+
+      # The vitest suite (test/**) — the renderer, the shared logic, the hub.
+      # test:unit above is only the node:test e2e helpers.
+      - name: Vitest
+        run: npm test
+
+      - name: Vite build
+        run: npm run build
+
+      - name: Install Python test dependencies
+        run: pip install -r python/requirements-dev.txt
+
+      - name: Run Python tests
+        working-directory: python
+        run: python -m pytest -q

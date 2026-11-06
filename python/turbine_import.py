@@ -1,0 +1,163 @@
+"""Translate the scraped Turbine strategy library into polybot crypto15m configs.
+
+Each Turbine strategy (turbine_strategies.json) is mapped by ARCHETYPE into the
+directional rule vocabulary — YES-side rules (buy up) and NO-side rules (buy
+down) over the fields the recorder now computes (priceVsVwapPct, change5mPct /
+change15mPct, velocity1mPct, ema12VsSma20Pct, ema1VsSma5Pct, upAsk/downAsk,
+upProb/downProb). The result is a crypto15m config slice that `replay.replay`
+can backtest on OUR recorded Polymarket data.
+
+Honesty: this is a best-effort translation of Turbine's natural-language rules,
+not a bit-exact port. Turbine's mid-window sell-to-close exits are NOT modeled
+(the backtest holds to settlement), and price bands are applied as an ENTRY
+window on the bought side. Archetypes that need stateful entry tracking
+(panic_fade) or simultaneous both-side entries (dual_side) are skipped. And the
+Turbine-reported stats are its OWN overfit backtest — every strategy is
+re-scored on real recorded data before it means anything.
+"""
+from __future__ import annotations
+
+import json
+import os
+import sys
+from typing import Optional
+
+# In a PyInstaller bundle the data file is unpacked under sys._MEIPASS; in dev it
+# sits next to this module.
+_BASE = getattr(sys, "_MEIPASS", os.path.dirname(__file__))
+_LIB_PATH = os.path.join(_BASE, "turbine_strategies.json")
+
+
+def _ge(field: str, v: float) -> dict:
+    return {"field": field, "op": ">=", "value": v}
+
+
+def _le(field: str, v: float) -> dict:
+    return {"field": field, "op": "<=", "value": v}
+
+
+def _gt(field: str, v: float) -> dict:
+    return {"field": field, "op": ">", "value": v}
+
+
+def _lt(field: str, v: float) -> dict:
+    return {"field": field, "op": "<", "value": v}
+
+
+def _change_field(lookback_min: Optional[float]) -> str:
+    """We only record change5mPct and change15mPct; snap a lookback to nearest."""
+    lb = float(lookback_min or 5)
+    return "change15mPct" if lb > 10 else "change5mPct"
+
+
+def _price_band_rules(side: str, band: Optional[list]) -> list[dict]:
+    """Gate the bought side's ask into Turbine's price window."""
+    if not band or len(band) != 2:
+        return []
+    ask = "upAsk" if side == "up" else "downAsk"
+    lo, hi = float(band[0]), float(band[1])
+    return [_ge(ask, lo), _le(ask, hi)]
+
+
+def import_strategy(s: dict) -> Optional[dict]:
+    """Map one library entry to a crypto15m config slice, or None if the
+    archetype can't be expressed in our per-tick rule vocabulary."""
+    arch = str(s.get("archetype") or "").lower()
+    ind = s.get("indicators") or {}
+    band = s.get("priceBand")
+    chg_field = _change_field(ind.get("lookbackMin"))
+    chg = float(ind.get("changePct") or 0.1)
+    vel = float(ind.get("velocityPct") or 0.1)
+    ema_field = "ema1VsSma5Pct" if ind.get("ema") == 1 else "ema12VsSma20Pct"
+
+    yes: list[dict] = []
+    no: list[dict] = []
+
+    if arch in ("momentum",):
+        yes, no = [_gt(chg_field, chg)], [_lt(chg_field, -chg)]
+    elif arch in ("vwap_momentum",):
+        yes = [_gt("priceVsVwapPct", 0), _gt(chg_field, chg)]
+        no = [_lt("priceVsVwapPct", 0), _lt(chg_field, -chg)]
+    elif arch in ("vwap_trend", "vwap_entry"):
+        yes, no = [_gt("priceVsVwapPct", 0)], [_lt("priceVsVwapPct", 0)]
+    elif arch in ("vwap_ema_trend", "vwap_ema_momentum"):
+        yes = [_gt("priceVsVwapPct", 0), _gt("ema12VsSma20Pct", 0), _gt(chg_field, chg)]
+        no = [_lt("priceVsVwapPct", 0), _lt("ema12VsSma20Pct", 0), _lt(chg_field, -chg)]
+    elif arch in ("vwap_velocity",):
+        yes = [_gt("priceVsVwapPct", 0), _gt("change5mPct", 0), _gt("velocity1mPct", vel)]
+        no = [_lt("priceVsVwapPct", 0), _lt("change5mPct", 0), _lt("velocity1mPct", -vel)]
+    elif arch in ("velocity", "velocity_scalp"):
+        yes, no = [_gt("velocity1mPct", vel)], [_lt("velocity1mPct", -vel)]
+    elif arch in ("ema_sma_cross",):
+        yes, no = [_gt(ema_field, 0)], [_lt(ema_field, 0)]
+    elif arch in ("ema_sma_vwap", "ema_sma_change", "vwap_ma_momentum"):
+        yes = [_gt("ema12VsSma20Pct", 0), _gt("priceVsVwapPct", 0)]
+        no = [_lt("ema12VsSma20Pct", 0), _lt("priceVsVwapPct", 0)]
+        if "change" in arch or arch == "vwap_ma_momentum":
+            yes.append(_gt(chg_field, chg))
+            no.append(_lt(chg_field, -chg))
+    elif arch in ("favorite_momentum",):
+        yes, no = [_gt("change5mPct", 0)], [_lt("change5mPct", 0)]
+    elif arch in ("favorite",):
+        # Buy the strong favorite: up when P(up) high, down when P(down) high.
+        yes, no = [_ge("upProb", 0.80)], [_ge("downProb", 0.80)]
+    elif arch in ("mean_reversion",):
+        # Buy the CHEAP side (bet on reversion toward 0.50).
+        yes, no = [_le("upAsk", 0.35)], [_le("downAsk", 0.35)]
+    elif arch in ("scalp",):
+        # Fixed high-price scalp on the favorite side.
+        b = band or [0.80, 0.90]
+        yes = _price_band_rules("up", b)
+        no = _price_band_rules("down", b)
+    elif arch in ("sweep",):
+        # Late-window near-certain sweep: buy the ~sure side.
+        lo = float((band or [0.95, 0.99])[0])
+        yes, no = [_ge("upAsk", lo)], [_ge("downAsk", lo)]
+    else:
+        return None  # dual_side / panic_fade / unknown — skip
+
+    if not yes and not no:
+        return None
+
+    # Apply Turbine's price window as an entry gate on the bought side (skip for
+    # archetypes that already encode price in their rules).
+    if arch not in ("scalp", "sweep", "mean_reversion", "favorite"):
+        yes = yes + _price_band_rules("up", band)
+        no = no + _price_band_rules("down", band)
+
+    return {
+        # Every Turbine strategy is a 15-minute one (KX*15M series). Pinned
+        # rather than inherited from the config default, so the backtest
+        # replays 15m windows on purpose and says so when none are recorded.
+        "crypto15m_interval": "15m",
+        "crypto15m_use_rules": True,
+        "crypto15m_rules": yes,
+        "crypto15m_rules_no": no,
+        "crypto15m_assets": [s.get("asset")] if s.get("asset") else None,
+        "crypto15m_entry_style": "taker",
+        "crypto15m_order_size": int(s.get("size") or 1),
+    }
+
+
+def load_library(path: str = _LIB_PATH) -> list[dict]:
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            return (json.load(f) or {}).get("strategies", [])
+    except FileNotFoundError:
+        return []
+
+
+def import_all(path: str = _LIB_PATH) -> tuple[list[dict], list[dict]]:
+    """Returns (imported, skipped). Each imported item:
+    {name, asset, archetype, turbine, config}."""
+    imported: list[dict] = []
+    skipped: list[dict] = []
+    for s in load_library(path):
+        cfg = import_strategy(s)
+        entry = {"name": s.get("name"), "asset": s.get("asset"),
+                 "archetype": s.get("archetype"), "turbine": s.get("turbine")}
+        if cfg is None:
+            skipped.append(entry)
+        else:
+            imported.append({**entry, "config": cfg})
+    return imported, skipped

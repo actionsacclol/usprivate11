@@ -1,0 +1,15 @@
+httpx>=0.28.0
+cryptography>=42.0.0
+# Real-time market and order feeds: clob_ws.py, user_ws.py, spot_ws.py.
+websockets>=12,<14
+# OS keychain access for at-rest credential encryption on macOS/Linux
+# (polymarket_auth). Pulls SecretStorage + jeepney on Linux automatically (env
+# markers); on Windows DPAPI is used instead so keyring is unused there.
+keyring>=24
+# AI market analysis (manual terminal). Both are optional at runtime: the
+# feature ships off and keyless, and ai_analysis reports a missing package as
+# a reason on the panel rather than failing to import.
+# NOTE: anthropic 1.x is built on httpx2, so the frozen bundle carries both
+# httpx (our own client) and httpx2 (the SDK's).
+anthropic>=1.0.0
+openai>=1.0.0

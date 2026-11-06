@@ -1,0 +1,68 @@
+[
+  {
+    "id": "quickstart",
+    "title": "Start here",
+    "blurb": "Your first few minutes, on pretend money.",
+    "seconds": 154
+  },
+  {
+    "id": "account",
+    "title": "Connect your Polymarket account",
+    "blurb": "Make an account, get your key, join the squad.",
+    "seconds": 173
+  },
+  {
+    "id": "agents",
+    "title": "Connect Claude or another AI",
+    "blurb": "One button, then your AI can use the bot. MCP explained.",
+    "seconds": 150
+  },
+  {
+    "id": "autopilot",
+    "title": "Autopilot: the AI inside the app",
+    "blurb": "No other apps. It runs on a schedule, inside a budget.",
+    "seconds": 97
+  },
+  {
+    "id": "golive",
+    "title": "Let your AI trade real money",
+    "blurb": "Starter limits, approvals, and how to stop it.",
+    "seconds": 161
+  },
+  {
+    "id": "trade",
+    "title": "Find a market and trade it yourself",
+    "blurb": "Discover, Market and Track, with no AI.",
+    "seconds": 121
+  },
+  {
+    "id": "scripts",
+    "title": "Write your own strategy",
+    "blurb": "Get an AI to write a script, test it, then let it run.",
+    "seconds": 117
+  },
+  {
+    "id": "backtest",
+    "title": "Test an idea on old data",
+    "blurb": "Download history, run a backtest, read the result.",
+    "seconds": 65
+  },
+  {
+    "id": "strategies",
+    "title": "Ready-made strategies",
+    "blurb": "What they do, how they lose, and how shadow mode works.",
+    "seconds": 73
+  },
+  {
+    "id": "safety",
+    "title": "Stop everything, and fix problems",
+    "blurb": "The Kill switch, corner alerts, and getting back to paper.",
+    "seconds": 97
+  },
+  {
+    "id": "extras",
+    "title": "Agent Hub and your phone",
+    "blurb": "Watch your AI as a game, and check on it from your phone.",
+    "seconds": 50
+  }
+]

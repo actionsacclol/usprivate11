@@ -1,0 +1,38 @@
+[
+ {
+  "id": "intro",
+  "text": "Hi! Let's get Krypt PolyBot trading for you. It takes about five minutes. Just copy what I do."
+ },
+ {
+  "id": "signup",
+  "text": "Step one. In the app, press Sign up on Polymarket. Make your free account, and put in twenty dollars. Using our link keeps this bot free."
+ },
+ {
+  "id": "onboard",
+  "text": "Step two. Tick both boxes and press Continue. Skip the AI agent part, and press Start on paper. Paper is pretend money, so you can't break anything."
+ },
+ {
+  "id": "export",
+  "text": "Step three. On Polymarket, open Settings. Press Export private key, and copy it. Turn on auto redeem too, so your winnings turn back into cash. Then copy your deposit wallet address. It starts with zero x. Never share that key with anyone."
+ },
+ {
+  "id": "wallet",
+  "text": "Step four. In the bot, click Wallet. Paste the key in the top box, and the address in the bottom box. Press Save and connect, then Test. Green means you're in."
+ },
+ {
+  "id": "connect",
+  "text": "Step five. Get the Claude Desktop app from claude dot ai, and sign in. Back in the bot, click AI Agents. Pick Claude Desktop, and press Add to Claude Desktop. Then fully quit Claude, and open it again."
+ },
+ {
+  "id": "golive",
+  "text": "Step six. Press Go live, top right. Press Test wallet, and tick the box. Your agent is already ticked. Press Use starter caps. That's five dollars a trade, and it stops for the day after a ten dollar loss. Switch off Ask me before each live order, and press Turn approvals off, so it trades by itself. Press Review and go live, then Go live."
+ },
+ {
+  "id": "trade",
+  "text": "Step seven. In Claude, type: use krypt polybot, look through all the markets, and buy where you have an edge. When Claude asks to use the tools, press Allow. Claude trades while it works on your message. To keep trading around the clock, press Set up Autopilot on the AI Agents page. That's it, your AI is trading!"
+ },
+ {
+  "id": "outro",
+  "text": "If the bot isn't working, try disabling your VPN. You must be in a region where polymarket dot com is legal."
+ }
+]

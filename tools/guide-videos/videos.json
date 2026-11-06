@@ -1,0 +1,1752 @@
+[
+ {
+  "id": "quickstart",
+  "title": "Start here",
+  "blurb": "Your first few minutes, on pretend money.",
+  "scenes": [
+   {
+    "id": "hello",
+    "say": "Hi! This video sets up Krypt PolyBot, click by click. You start with pretend money, so you can't break anything."
+   },
+   {
+    "id": "welcome",
+    "say": "When the app opens, press Continue.",
+    "hl": [
+     {
+      "find": {
+       "id": "onboarding-continue"
+      },
+      "at": "Continue"
+     }
+    ]
+   },
+   {
+    "id": "boxes",
+    "do": [
+     {
+      "id": "onboarding-continue"
+     }
+    ],
+    "say": "Read this screen. Real trading can lose real money. If you're okay with that, tick both boxes.",
+    "hl": [
+     {
+      "find": {
+       "id": "disclaimer-accept"
+      },
+      "at": "both"
+     },
+     {
+      "find": {
+       "id": "disclaimer-eligible"
+      },
+      "at": "both"
+     }
+    ]
+   },
+   {
+    "id": "boxes2",
+    "do": [
+     {
+      "id": "disclaimer-accept"
+     },
+     {
+      "id": "disclaimer-eligible"
+     }
+    ],
+    "say": "Then press Continue.",
+    "hl": [
+     {
+      "find": {
+       "id": "onboarding-continue"
+      },
+      "at": "Continue"
+     }
+    ]
+   },
+   {
+    "id": "account",
+    "do": [
+     {
+      "id": "onboarding-continue"
+     }
+    ],
+    "say": "It asks about a Polymarket account. You don't need one yet. Press Continue on paper.",
+    "hl": [
+     {
+      "find": {
+       "id": "setup-leave"
+      },
+      "at": "Continue"
+     }
+    ]
+   },
+   {
+    "id": "goal",
+    "do": [
+     {
+      "id": "setup-leave"
+     }
+    ],
+    "say": "Now pick what you want to do. We'll pick let an AI trade for me. You can try the others later. Then press Continue.",
+    "hl": [
+     {
+      "find": {
+       "id": "goal-ai"
+      },
+      "at": "pick",
+      "n": 1
+     },
+     {
+      "find": {
+       "id": "onboarding-continue"
+      },
+      "at": "Continue"
+     }
+    ]
+   },
+   {
+    "id": "skipai",
+    "do": [
+     {
+      "id": "onboarding-continue"
+     }
+    ],
+    "say": "This screen connects your AI. There's a separate video for that, so press Skip for now.",
+    "hl": [
+     {
+      "find": {
+       "t": "Skip"
+      },
+      "at": "Skip"
+     }
+    ]
+   },
+   {
+    "id": "start",
+    "do": [
+     {
+      "t": "Skip"
+     }
+    ],
+    "say": "Leave the download box ticked. It quietly grabs price history for testing ideas later. Then press Start on paper.",
+    "hl": [
+     {
+      "find": {
+       "id": "onboarding-history"
+      },
+      "at": "download"
+     },
+     {
+      "find": {
+       "id": "onboarding-start-paper"
+      },
+      "at": "Start"
+     }
+    ]
+   },
+   {
+    "id": "in",
+    "do": [
+     {
+      "id": "onboarding-history"
+     },
+     {
+      "id": "onboarding-start-paper",
+      "after": 3000
+     }
+    ],
+    "say": "You're in! This little box offers a one minute tour of the app. It's worth taking.",
+    "hl": [
+     {
+      "find": {
+       "t": "Start"
+      },
+      "at": "tour"
+     }
+    ]
+   },
+   {
+    "id": "modes",
+    "do": [
+     {
+      "t": "Not now",
+      "optional": true
+     }
+    ],
+    "say": "Now look up here. Paper is pretend money on real markets. Live is real money. You stay on Paper until you choose Live.",
+    "hl": [
+     {
+      "find": {
+       "id": "mode-paper"
+      },
+      "at": "Paper"
+     },
+     {
+      "find": {
+       "id": "mode-live"
+      },
+      "at": "Live"
+     }
+    ]
+   },
+   {
+    "id": "balance",
+    "say": "This is your paper balance. One thousand pretend dollars.",
+    "hl": [
+     {
+      "find": {
+       "has": "PAPER BALANCE",
+       "up": 1
+      },
+      "at": "balance"
+     }
+    ]
+   },
+   {
+    "id": "squad",
+    "say": "See this green button? It takes you to the Krypt squad on Polymarket, with its group chat. It opens in your browser. Then you click join.",
+    "hl": [
+     {
+      "find": {
+       "id": "topbar-squad"
+      },
+      "at": "green"
+     }
+    ]
+   },
+   {
+    "id": "guide",
+    "do": [
+     {
+      "nav": "Guide",
+      "after": 1500
+     }
+    ],
+    "say": "Stuck? Click Guide on the left. There's a short video for everything in the app.",
+    "hl": [
+     {
+      "find": {
+       "nav": "Guide"
+      },
+      "at": "Guide"
+     }
+    ]
+   },
+   {
+    "id": "legal",
+    "blur": true,
+    "card": {
+     "title": "BEFORE YOU GO",
+     "tone": "red",
+     "rows": [
+      {
+       "text": "Won't load? Turn OFF your VPN",
+       "at": "VPN"
+      },
+      {
+       "text": "Only use it where Polymarket US is legal for you",
+       "at": "legal"
+      },
+      {
+       "text": "Not financial advice",
+       "at": "financial"
+      }
+     ]
+    },
+    "say": "If something won't load, turn off your VPN. You must be somewhere Polymarket US is legal for you. And none of this is financial advice."
+   }
+  ]
+ },
+ {
+  "id": "account",
+  "title": "Connect your Polymarket account",
+  "blurb": "Make an account, get your key, join the squad.",
+  "start": [
+   {
+    "nav": "API Key",
+    "after": 1500
+   }
+  ],
+  "scenes": [
+   {
+    "id": "why",
+    "say": "You only need this for real money. Paper works with no account at all. To start, click API Key on the left.",
+    "hl": [
+     {
+      "find": {
+       "nav": "API Key"
+      },
+      "at": "API"
+     }
+    ]
+   },
+   {
+    "id": "new",
+    "say": "New to Polymarket? Press No, help me make one. That uses Krypt's invite link, so Krypt gets credit when you sign up with it.",
+    "hl": [
+     {
+      "find": {
+       "id": "setup-new"
+      },
+      "at": "No"
+     }
+    ]
+   },
+   {
+    "id": "offer",
+    "say": "The green badge is the sign up offer. Polymarket US says you get it after you sign up with the code, finish setup, and deposit at least ten dollars. Its terms decide.",
+    "hl": [
+     {
+      "find": {
+       "has": "Free 25 dollars"
+      },
+      "at": "green"
+     }
+    ]
+   },
+   {
+    "id": "existing",
+    "say": "Already have an account? Press Yes, I have an account. You skip right to the key. Any Polymarket US account works.",
+    "hl": [
+     {
+      "find": {
+       "id": "setup-existing"
+      },
+      "at": "Yes"
+     }
+    ]
+   },
+   {
+    "id": "signup",
+    "do": [
+     {
+      "id": "setup-new",
+      "after": 1000
+     }
+    ],
+    "say": "Press Open the sign up page. It opens in your browser. Continue with Google or Apple, and remember which one you picked.",
+    "hl": [
+     {
+      "find": {
+       "id": "setup-open-signup"
+      },
+      "at": "Open"
+     }
+    ]
+   },
+   {
+    "id": "signup2",
+    "say": "If it asks for a code, type this one. Then come back and press Done, next.",
+    "hl": [
+     {
+      "find": {
+       "id": "setup-invite-code"
+      },
+      "at": "code"
+     },
+     {
+      "find": {
+       "t": "Done, next"
+      },
+      "at": "Done"
+     }
+    ]
+   },
+   {
+    "id": "verify",
+    "do": [
+     {
+      "t": "Done, next",
+      "after": 1000
+     }
+    ],
+    "say": "Now grab your phone. Install the Polymarket US app, sign in the same way, and do the identity check. Those details go to Polymarket, never to this app.",
+    "hl": [
+     {
+      "find": {
+       "t": "Done, next"
+      },
+      "at": "check"
+     }
+    ]
+   },
+   {
+    "id": "fund",
+    "do": [
+     {
+      "t": "Done, next",
+      "after": 1000
+     }
+    ],
+    "say": "In the phone app, tap Portfolio, then Deposit. Start small. Only add money you can afford to lose. You can skip this for now.",
+    "hl": [
+     {
+      "find": {
+       "t": "Done or skip"
+      },
+      "at": "skip"
+     }
+    ]
+   },
+   {
+    "id": "key",
+    "do": [
+     {
+      "t": "Done or skip",
+      "after": 1000
+     }
+    ],
+    "say": "Now the key. Press Open the developer page, and sign in the same way. Create a new key. You'll see a Key ID and a Secret Key.",
+    "hl": [
+     {
+      "find": {
+       "id": "setup-open-developer"
+      },
+      "at": "Open"
+     }
+    ]
+   },
+   {
+    "id": "paste",
+    "do": [
+     {
+      "t": "Done, next",
+      "after": 1000
+     }
+    ],
+    "say": "Paste the Key ID in the top box, and the Secret Key in the bottom box. You only see that Secret Key once, so copy it right away. Then press Save and test.",
+    "hl": [
+     {
+      "find": {
+       "id": "api-key-id"
+      },
+      "at": "ID"
+     },
+     {
+      "find": {
+       "id": "api-key-secret"
+      },
+      "at": "Secret"
+     },
+     {
+      "find": {
+       "t": "Save and"
+      },
+      "at": "Save"
+     }
+    ]
+   },
+   {
+    "id": "connected",
+    "blur": true,
+    "card": {
+     "title": "ONCE IT CONNECTS",
+     "rows": [
+      {
+       "text": "The squad page opens in your browser",
+       "at": "squad"
+      },
+      {
+       "text": "Click join",
+       "at": "join"
+      },
+      {
+       "text": "Real trading is still OFF",
+       "at": "off"
+      },
+      {
+       "text": "Never share your Secret Key",
+       "at": "share",
+       "tone": "red"
+      }
+     ]
+    },
+    "say": "Once it connects, the Krypt squad page opens in your browser. Click join. Real trading is still off, until you turn it on. And never share your Secret Key with anyone."
+   }
+  ],
+  "end": [
+   {
+    "t": "Finish later",
+    "optional": true
+   },
+   {
+    "t": "Hide this guide",
+    "optional": true
+   }
+  ]
+ },
+ {
+  "id": "agents",
+  "title": "Connect Claude or another AI",
+  "blurb": "One button, then your AI can use the bot. MCP explained.",
+  "start": [
+   {
+    "nav": "AI Agents",
+    "after": 1500
+   }
+  ],
+  "scenes": [
+   {
+    "id": "what",
+    "say": "MCP is how an AI app on your computer plugs into this bot. It can read markets, make forecasts, and place trades. It starts on pretend money."
+   },
+   {
+    "id": "pick",
+    "say": "Click AI Agents, then pick the AI app you use. We'll pick Claude Desktop.",
+    "hl": [
+     {
+      "find": {
+       "nav": "AI Agents"
+      },
+      "at": "AI"
+     },
+     {
+      "find": {
+       "id": "connect-pick-claude-desktop"
+      },
+      "at": "Desktop"
+     }
+    ]
+   },
+   {
+    "id": "add",
+    "do": [
+     {
+      "id": "connect-pick-claude-desktop",
+      "after": 800
+     }
+    ],
+    "say": "Press Add to Claude Desktop. The app does the setup for you, and keeps a backup of the old settings.",
+    "hl": [
+     {
+      "find": {
+       "id": "connect-install"
+      },
+      "at": "Add"
+     }
+    ]
+   },
+   {
+    "id": "restart",
+    "do": [
+     {
+      "id": "connect-install",
+      "after": 1500
+     }
+    ],
+    "blur": true,
+    "card": {
+     "title": "THEN RESTART CLAUDE",
+     "rows": [
+      {
+       "text": "Right-click the Claude icon by your clock",
+       "at": "Right"
+      },
+      {
+       "text": "Press Quit",
+       "at": "Quit"
+      },
+      {
+       "text": "Open Claude again",
+       "at": "open"
+      }
+     ]
+    },
+    "say": "Now fully close Claude. Right click its icon by your clock, and press Quit. Then open it again. Closing the window isn't enough."
+   },
+   {
+    "id": "code",
+    "do": [
+     {
+      "id": "connect-pick-claude-code",
+      "after": 800
+     }
+    ],
+    "say": "Using Claude Code instead? Pick it, and press Add to Claude Code. Then start a new session.",
+    "hl": [
+     {
+      "find": {
+       "id": "connect-pick-claude-code"
+      },
+      "at": "Pick"
+     },
+     {
+      "find": {
+       "id": "connect-install"
+      },
+      "at": "Add"
+     }
+    ]
+   },
+   {
+    "id": "others",
+    "say": "Cursor, Codex and Windsurf work the same way. Pick it, press Add, and restart it.",
+    "hl": [
+     {
+      "find": {
+       "id": "connect-pick-cursor"
+      },
+      "at": "Cursor"
+     },
+     {
+      "find": {
+       "id": "connect-pick-codex"
+      },
+      "at": "Codex"
+     },
+     {
+      "find": {
+       "id": "connect-pick-windsurf"
+      },
+      "at": "Windsurf"
+     }
+    ]
+   },
+   {
+    "id": "ask",
+    "blur": true,
+    "prompt": {
+     "title": "IN YOUR AI APP, TYPE THIS",
+     "text": "Use krypt-polybot-us. Look through the markets and make paper trades where you have an edge.",
+     "from": "type",
+     "to": "edge"
+    },
+    "say": "Now go to your AI app, and type this. Use krypt polybot US. Look through the markets, and make paper trades where you have an edge."
+   },
+   {
+    "id": "allow",
+    "blur": true,
+    "card": {
+     "title": "WHEN YOUR AI ASKS",
+     "rows": [
+      {
+       "text": "Press Allow when it asks to use the tools",
+       "at": "Allow"
+      },
+      {
+       "text": "Keep this app open while your AI works",
+       "at": "open"
+      },
+      {
+       "text": "It trades while it works on your message",
+       "at": "message"
+      }
+     ]
+    },
+    "say": "When it asks to use the tools, press Allow. Keep this app open while your AI works. It only trades while it's working on your message."
+   },
+   {
+    "id": "watch",
+    "do": [
+     {
+      "scrollTo": {
+       "has": "IT TRADES ON PAPER",
+       "block": "center"
+      }
+     }
+    ],
+    "say": "Back here, you can watch it work. Each buy needs a forecast first, and that forecast has to beat the price after fees, or the app refuses the order.",
+    "hl": [
+     {
+      "find": {
+       "has": "IT TRADES ON PAPER",
+       "up": 2
+      },
+      "at": "forecast"
+     }
+    ],
+    "seed": true
+   },
+   {
+    "id": "score",
+    "say": "Once markets finish, each forecast gets scored against the market. That's how you find out if your AI is any good. Until then, nobody knows.",
+    "hl": [
+     {
+      "find": {
+       "has": "DOES IT BEAT THE MARKET",
+       "up": 2
+      },
+      "at": "scored"
+     }
+    ]
+   },
+   {
+    "id": "more",
+    "do": [
+     {
+      "scrollTo": {
+       "t": "New agent"
+      }
+     }
+    ],
+    "say": "Want more than one? Press New agent. Each one gets its own rules, limits and record.",
+    "hl": [
+     {
+      "find": {
+       "t": "New agent"
+      },
+      "at": "New"
+     }
+    ]
+   }
+  ]
+ },
+ {
+  "id": "autopilot",
+  "title": "Autopilot: the AI inside the app",
+  "blurb": "No other apps. It runs on a schedule, inside a budget.",
+  "start": [
+   {
+    "nav": "AI Agents",
+    "after": 1500
+   },
+   {
+    "id": "connect-pick-autopilot"
+   }
+  ],
+  "scenes": [
+   {
+    "id": "what",
+    "say": "Autopilot runs an AI right inside this app, on a schedule. There's nothing else to install. On AI Agents, pick In-app Autopilot, then press Set up Autopilot.",
+    "hl": [
+     {
+      "find": {
+       "id": "connect-pick-autopilot"
+      },
+      "at": "In-app"
+     },
+     {
+      "find": {
+       "id": "connect-autopilot-setup"
+      },
+      "at": "Set"
+     }
+    ]
+   },
+   {
+    "id": "pick",
+    "do": [
+     {
+      "id": "connect-autopilot-setup",
+      "after": 1200
+     }
+    ],
+    "say": "Pick your AI. A cloud AI needs an API key, and bills you for each use. A local AI runs on your own computer for free, but you need a good computer.",
+    "hl": [
+     {
+      "find": {
+       "id": "provider-anthropic"
+      },
+      "at": "cloud"
+     }
+    ]
+   },
+   {
+    "id": "key",
+    "do": [
+     {
+      "id": "qs-next",
+      "after": 1000
+     }
+    ],
+    "say": "Got a cloud AI? Paste your key here, and press the button next to it. It checks the key before you move on.",
+    "hl": [
+     {
+      "find": {
+       "id": "ai-key-input"
+      },
+      "at": "key"
+     }
+    ]
+   },
+   {
+    "id": "mission",
+    "do": [
+     {
+      "hook": {
+       "id": "autopilot-quickstart"
+      },
+      "from": 1,
+      "to": 2
+     }
+    ],
+    "say": "Now pick a mission. That's what it does on each run. You can change the words, now or later.",
+    "hl": [
+     {
+      "find": {
+       "id": "mission-text"
+      },
+      "at": "change"
+     }
+    ]
+   },
+   {
+    "id": "limits",
+    "do": [
+     {
+      "hook": {
+       "id": "autopilot-quickstart"
+      },
+      "from": 2,
+      "to": 3
+     }
+    ],
+    "say": "Set its limits. These are hard limits, checked before every call. When it hits one, it stops."
+   },
+   {
+    "id": "on",
+    "do": [
+     {
+      "hook": {
+       "id": "autopilot-quickstart"
+      },
+      "from": 3,
+      "to": 4
+     }
+    ],
+    "say": "Then turn it on. It runs on paper. This never turns on real money. That has its own video.",
+    "hl": [
+     {
+      "find": {
+       "t": "Turn on Autopilot"
+      },
+      "at": "turn"
+     }
+    ]
+   },
+   {
+    "id": "done",
+    "do": [
+     {
+      "esc": true
+     },
+     {
+      "t": "Skip",
+      "optional": true
+     },
+     {
+      "nav": "AI Agents",
+      "after": 1000
+     }
+    ],
+    "say": "A cloud AI costs money each time it runs, even on paper. So check your AI bill after the first day."
+   }
+  ]
+ },
+ {
+  "id": "golive",
+  "title": "Let your AI trade real money",
+  "blurb": "Starter limits, approvals, and how to stop it.",
+  "start": [
+   {
+    "nav": "AI Agents",
+    "after": 1500
+   }
+  ],
+  "scenes": [
+   {
+    "id": "warn",
+    "blur": true,
+    "card": {
+     "title": "THIS ONE IS REAL MONEY",
+     "tone": "red",
+     "rows": [
+      {
+       "text": "An AI can be wrong, with total confidence",
+       "at": "wrong"
+      },
+      {
+       "text": "Run it on paper first",
+       "at": "paper"
+      },
+      {
+       "text": "Only money you can afford to lose",
+       "at": "afford"
+      }
+     ]
+    },
+    "say": "This one is real money. An AI can be wrong, with total confidence. So run it on paper first, and only use money you can afford to lose."
+   },
+   {
+    "id": "open",
+    "say": "You need your Polymarket key connected first. There's a video for that. Then on AI Agents, press Go live, top right.",
+    "hl": [
+     {
+      "find": {
+       "qa": "golive-open"
+      },
+      "at": "Go"
+     }
+    ]
+   },
+   {
+    "id": "keys",
+    "do": [
+     {
+      "qa": "golive-open",
+      "after": 1500
+     }
+    ],
+    "say": "Go down the list from the top. Step one checks your Polymarket key. Press Test API key when you see it.",
+    "hl": [
+     {
+      "find": {
+       "has": "1. Polymarket US API key",
+       "up": 1
+      },
+      "at": "key"
+     }
+    ]
+   },
+   {
+    "id": "record",
+    "say": "Step two is your agent's record on paper. If it hasn't shown it can beat the market, you have to tick a box that says you understand that. Be honest with yourself here.",
+    "hl": [
+     {
+      "find": {
+       "has": "2. Your agents",
+       "up": 1
+      },
+      "at": "record"
+     }
+    ]
+   },
+   {
+    "id": "which",
+    "do": [
+     {
+      "scrollTo": {
+       "has": "3. Which agents go live"
+      }
+     }
+    ],
+    "say": "Step three. Tick the agent you want to go live. Any other agents stay on paper.",
+    "hl": [
+     {
+      "find": {
+       "has": "3. Which agents go live",
+       "up": 1
+      },
+      "at": "Tick"
+     }
+    ]
+   },
+   {
+    "id": "caps",
+    "do": [
+     {
+      "scrollTo": {
+       "qa": "golive-starter"
+      }
+     },
+     {
+      "qa": "golive-starter",
+      "after": 700
+     }
+    ],
+    "say": "Step four. Press Use starter caps. That's five dollars an order, twenty dollars a day, three open positions, and it stops after losing ten dollars in a day. The app enforces these on every order.",
+    "hl": [
+     {
+      "find": {
+       "qa": "golive-starter"
+      },
+      "at": "Use"
+     }
+    ]
+   },
+   {
+    "id": "approve",
+    "do": [
+     {
+      "scrollTo": {
+       "has": "Ask me before each live order"
+      }
+     }
+    ],
+    "say": "Step five is approvals. Leave this on, and you approve every order yourself. Switch it off to make it fully automatic. Then it trades alone, inside your limits.",
+    "hl": [
+     {
+      "find": {
+       "has": "Ask me before each live order",
+       "up": 1
+      },
+      "at": "approvals"
+     }
+    ]
+   },
+   {
+    "id": "mode",
+    "do": [
+     {
+      "scrollTo": {
+       "has": "6. Account mode"
+      }
+     }
+    ],
+    "say": "Step six. Going live here switches the whole app to Live, so anything you've armed starts using real money too. Read this box.",
+    "hl": [
+     {
+      "find": {
+       "has": "6. Account mode",
+       "up": 1
+      },
+      "at": "whole"
+     }
+    ]
+   },
+   {
+    "id": "review",
+    "do": [
+     {
+      "scrollTo": {
+       "t": "Review"
+      }
+     }
+    ],
+    "say": "Press Review and go live. It shows you exactly what will change. Read it, then press Go live.",
+    "hl": [
+     {
+      "find": {
+       "t": "Review"
+      },
+      "at": "Review"
+     }
+    ]
+   },
+   {
+    "id": "stop",
+    "do": [
+     {
+      "esc": true
+     }
+    ],
+    "blur": true,
+    "card": {
+     "title": "HOW TO STOP IT",
+     "rows": [
+      {
+       "text": "Stop agents, in the top bar",
+       "at": "agents"
+      },
+      {
+       "text": "Or the Paper button, to go back to paper",
+       "at": "Paper"
+      },
+      {
+       "text": "Kill switch on Bot positions cancels everything",
+       "at": "Kill"
+      }
+     ]
+    },
+    "say": "To stop it, press Stop agents in the top bar. Or press Paper to go back to pretend money. Kill switch stops everything at once. There's a video on that too."
+   }
+  ]
+ },
+ {
+  "id": "trade",
+  "title": "Find a market and trade it yourself",
+  "blurb": "Discover, Market and Track, with no AI.",
+  "start": [
+   {
+    "nav": "Discover",
+    "after": 5000
+   }
+  ],
+  "scenes": [
+   {
+    "id": "discover",
+    "say": "Want to trade by yourself? Click Discover. These columns show what's new, what's closing soon, and what's busy.",
+    "hl": [
+     {
+      "find": {
+       "nav": "Discover"
+      },
+      "at": "Discover"
+     }
+    ]
+   },
+   {
+    "id": "search",
+    "do": [
+     {
+      "fill": {
+       "sel": "main input"
+      },
+      "value": "Pro Football Champion"
+     },
+     {
+      "wait": 2500
+     }
+    ],
+    "say": "Looking for something? Type it in the search box, then click a market.",
+    "hl": [
+     {
+      "find": {
+       "sel": "main input"
+      },
+      "at": "search"
+     }
+    ]
+   },
+   {
+    "id": "market",
+    "do": [
+     {
+      "js": "(()=>{const b=[...document.querySelectorAll('main button')].filter(x=>/Pro Football Champion 2027: San Francisco/.test(x.innerText));b[0]&&b[0].click();return b.length})()"
+     },
+     {
+      "wait": 6000
+     }
+    ],
+    "say": "This is the market. The chart shows the price. The price is roughly the crowd's guess at the chance it happens. Twenty cents means about a twenty percent chance.",
+    "hl": [
+     {
+      "find": {
+       "has": "Pro Football Champion 2027: San"
+      },
+      "at": "market"
+     }
+    ]
+   },
+   {
+    "id": "no",
+    "say": "Think it will happen? Stay on Yes. Think it won't? Press No, right here.",
+    "hl": [
+     {
+      "find": {
+       "t": "No",
+       "first": true
+      },
+      "at": "No"
+     }
+    ]
+   },
+   {
+    "id": "ticket",
+    "do": [
+     {
+      "scrollTo": {
+       "has": "Order ticket"
+      }
+     }
+    ],
+    "say": "Press Buy. Then type how many shares you want in Size. If you're right, each share pays one dollar. If you're wrong, it pays nothing, and you lose what you paid.",
+    "hl": [
+     {
+      "find": {
+       "t": "Buy YES"
+      },
+      "at": "Buy"
+     },
+     {
+      "find": {
+       "size": true
+      },
+      "at": "Size"
+     }
+    ]
+   },
+   {
+    "id": "review",
+    "do": [
+     {
+      "fill": {
+       "size": true
+      },
+      "value": "5"
+     },
+     {
+      "scrollTo": {
+       "t": "Review"
+      }
+     }
+    ],
+    "say": "Press Review, and check the numbers. On Paper, this order is pretend. On Live, it's real money, and it says so.",
+    "hl": [
+     {
+      "find": {
+       "t": "Review"
+      },
+      "at": "Review"
+     }
+    ]
+   },
+   {
+    "id": "confirm",
+    "do": [
+     {
+      "t": "Review",
+      "after": 900
+     }
+    ],
+    "say": "Happy with it? Press Confirm. That sends the order.",
+    "hl": [
+     {
+      "find": {
+       "t": "Confirm"
+      },
+      "at": "Confirm"
+     }
+    ]
+   },
+   {
+    "id": "track",
+    "do": [
+     {
+      "t": "Confirm",
+      "after": 2500
+     },
+     {
+      "nav": "Track",
+      "after": 2000
+     },
+     {
+      "t": "Paper",
+      "after": 1200
+     }
+    ],
+    "say": "After you trade, click Track. It shows your positions, your orders, and what they cost. Your pretend trades are under the Paper tab.",
+    "hl": [
+     {
+      "find": {
+       "nav": "Track"
+      },
+      "at": "Track"
+     },
+     {
+      "find": {
+       "t": "Paper"
+      },
+      "at": "Paper"
+     }
+    ]
+   },
+   {
+    "id": "fees",
+    "blur": true,
+    "card": {
+     "title": "GOOD TO KNOW",
+     "rows": [
+      {
+       "text": "Paper uses real prices, with pretend money",
+       "at": "Paper"
+      },
+      {
+       "text": "Crossing the spread costs you, and so do fees",
+       "at": "fees"
+      },
+      {
+       "text": "Start small on Live",
+       "at": "small"
+      }
+     ]
+    },
+    "say": "Paper uses real prices with pretend money, so practice there. Buying at the ask costs you the spread, plus fees. And when you do go Live, start small."
+   }
+  ]
+ },
+ {
+  "id": "scripts",
+  "title": "Write your own strategy",
+  "blurb": "Get an AI to write a script, test it, then let it run.",
+  "start": [
+   {
+    "nav": "Scripts",
+    "after": 1500
+   }
+  ],
+  "scenes": [
+   {
+    "id": "what",
+    "say": "A script is your own trading rule, written in a little bit of Python. You don't have to know how to code, because an AI can write it for you.",
+    "hl": [
+     {
+      "find": {
+       "nav": "Scripts"
+      },
+      "at": "script"
+     }
+    ]
+   },
+   {
+    "id": "pack",
+    "say": "Press AI Context Pack. It copies everything an AI needs to know. Paste it into Claude or ChatGPT, describe your idea, and copy back the code it gives you.",
+    "hl": [
+     {
+      "find": {
+       "t": "AI Context Pack"
+      },
+      "at": "Press"
+     }
+    ]
+   },
+   {
+    "id": "new",
+    "say": "Then press New script.",
+    "hl": [
+     {
+      "find": {
+       "t": "New script"
+      },
+      "at": "New"
+     }
+    ]
+   },
+   {
+    "id": "editor",
+    "do": [
+     {
+      "t": "New script",
+      "after": 1800
+     }
+    ],
+    "say": "Paste the code in here, over what's there, and press Save. The app checks it for risky mistakes when you save.",
+    "hl": [
+     {
+      "find": {
+       "sel": ".cm-editor"
+      },
+      "at": "Paste"
+     },
+     {
+      "find": {
+       "t": "Save"
+      },
+      "at": "Save"
+     }
+    ]
+   },
+   {
+    "id": "backtest",
+    "say": "Now test it. Press Run backtest, down here. It replays your idea on recorded data, with fees included. If it loses money there, don't run it.",
+    "hl": [
+     {
+      "find": {
+       "t": "Run backtest"
+      },
+      "at": "Run"
+     }
+    ]
+   },
+   {
+    "id": "enable",
+    "say": "Happy with it? Switch it on. It starts in shadow mode. That means it only writes down what it would have traded. No orders, no money.",
+    "hl": [
+     {
+      "find": {
+       "has": "Enabled"
+      },
+      "at": "Switch"
+     }
+    ]
+   },
+   {
+    "id": "shadow",
+    "say": "Watch the shadow orders for a few days. Do they look like what you wanted? If not, fix the script.",
+    "hl": [
+     {
+      "find": {
+       "t": "Shadow"
+      },
+      "at": "shadow"
+     }
+    ]
+   },
+   {
+    "id": "live",
+    "do": [],
+    "say": "Real orders need two more switches, on purpose. Press Shadow, up here, to arm the script. Then turn on Scripts live. These limits bind every script, and a script can't raise them.",
+    "hl": [
+     {
+      "find": {
+       "t": "Shadow",
+       "first": true
+      },
+      "at": "Shadow"
+     },
+     {
+      "find": {
+       "has": "Scripts live",
+       "up": 2
+      },
+      "at": "live"
+     }
+    ]
+   }
+  ]
+ },
+ {
+  "id": "backtest",
+  "title": "Test an idea on old data",
+  "blurb": "Download history, run a backtest, read the result.",
+  "start": [
+   {
+    "nav": "Backtest",
+    "after": 1500
+   }
+  ],
+  "scenes": [
+   {
+    "id": "what",
+    "say": "A backtest asks one question. If I had used this idea before, what would have happened? It works on crypto up or down markets. Click Backtest.",
+    "hl": [
+     {
+      "find": {
+       "nav": "Backtest"
+      },
+      "at": "Backtest"
+     }
+    ]
+   },
+   {
+    "id": "download",
+    "do": [
+     {
+      "scrollTo": {
+       "id": "history-start"
+      }
+     }
+    ],
+    "say": "First, get some data. Pick how many days, and press Download. It's free, and needs no account. It keeps going in the background.",
+    "hl": [
+     {
+      "find": {
+       "id": "history-days-7"
+      },
+      "at": "days"
+     },
+     {
+      "find": {
+       "id": "history-start"
+      },
+      "at": "Download"
+     }
+    ]
+   },
+   {
+    "id": "run",
+    "do": [
+     {
+      "scrollTo": {
+       "t": "Run backtest"
+      }
+     }
+    ],
+    "say": "When it's done, pick a strategy and how far back, then press Run backtest.",
+    "hl": [
+     {
+      "find": {
+       "t": "Run backtest"
+      },
+      "at": "Run"
+     }
+    ]
+   },
+   {
+    "id": "read",
+    "blur": true,
+    "card": {
+     "title": "READING THE RESULT",
+     "rows": [
+      {
+       "text": "Edge after fees is the number that matters",
+       "at": "fees"
+      },
+      {
+       "text": "A few trades prove nothing",
+       "at": "few"
+      },
+      {
+       "text": "Looks amazing? Doubt it first",
+       "at": "amazing"
+      }
+     ]
+    },
+    "say": "Look at the edge after fees. That's the one that matters. A few trades prove nothing, and if a result looks amazing, doubt it first. Old results don't promise future ones."
+   }
+  ]
+ },
+ {
+  "id": "strategies",
+  "title": "Ready-made strategies",
+  "blurb": "What they do, how they lose, and how shadow mode works.",
+  "start": [
+   {
+    "nav": "Strategies",
+    "after": 1500
+   }
+  ],
+  "scenes": [
+   {
+    "id": "what",
+    "say": "Strategies are ready-made rules you can install in one click. None of them is a money printer, and they have no track record on Polymarket US yet. So treat them as examples, and test them first.",
+    "hl": [
+     {
+      "find": {
+       "nav": "Strategies"
+      },
+      "at": "Strategies"
+     }
+    ]
+   },
+   {
+    "id": "card",
+    "do": [
+     {
+      "scrollTo": {
+       "t": "Install (shadow)"
+      }
+     }
+    ],
+    "say": "Each card tells you what to expect, and how it loses. Read that part.",
+    "hl": [
+     {
+      "find": {
+       "has": "How it loses",
+       "up": 1
+      },
+      "at": "loses"
+     }
+    ]
+   },
+   {
+    "id": "install",
+    "say": "Press Install. It goes in as a shadow, so it only records what it would have traded, with no money at all.",
+    "hl": [
+     {
+      "find": {
+       "t": "Install (shadow)"
+      },
+      "at": "Install"
+     }
+    ]
+   },
+   {
+    "id": "watch",
+    "do": [
+     {
+      "scrollTo": {
+       "has": "CRYPTO QUICK-START"
+      }
+     }
+    ],
+    "say": "Up here are the crypto quick starts. Load settings only fills in the numbers. Nothing runs until you press Start engine.",
+    "hl": [
+     {
+      "find": {
+       "t": "Load settings",
+       "first": true
+      },
+      "at": "Load"
+     },
+     {
+      "find": {
+       "t": "Start engine"
+      },
+      "at": "Start"
+     }
+    ]
+   },
+   {
+    "id": "positions",
+    "do": [
+     {
+      "nav": "Bot positions",
+      "after": 1500
+     }
+    ],
+    "say": "Whatever your bots open shows up on Bot positions. Watch it for a while before you trust anything with real money.",
+    "hl": [
+     {
+      "find": {
+       "nav": "Bot positions"
+      },
+      "at": "Bot"
+     }
+    ]
+   }
+  ]
+ },
+ {
+  "id": "safety",
+  "title": "Stop everything, and fix problems",
+  "blurb": "The Kill switch, corner alerts, and getting back to paper.",
+  "start": [
+   {
+    "nav": "Bot positions",
+    "after": 1500
+   }
+  ],
+  "scenes": [
+   {
+    "id": "paper",
+    "say": "Something feels wrong? First, press Paper at the top. New orders stop using real money. What you already own stays open.",
+    "hl": [
+     {
+      "find": {
+       "id": "mode-paper"
+      },
+      "at": "Paper"
+     }
+    ]
+   },
+   {
+    "id": "kill",
+    "say": "Need it all to stop right now? On Bot positions, press Kill switch. It refuses every new order, pauses the bots and AI agents, and cancels your open orders.",
+    "hl": [
+     {
+      "find": {
+       "t": "Kill switch"
+      },
+      "at": "Kill"
+     }
+    ]
+   },
+   {
+    "id": "killoff",
+    "say": "It stays on, even if you restart, until you turn it off. While it's on, no orders go out at all, and that includes selling.",
+    "hl": [
+     {
+      "find": {
+       "t": "Kill switch"
+      },
+      "at": "stays"
+     }
+    ]
+   },
+   {
+    "id": "cancel",
+    "say": "Cancel All only cancels your open orders. It doesn't close what you already own.",
+    "hl": [
+     {
+      "find": {
+       "t": "Cancel All"
+      },
+      "at": "Cancel"
+     }
+    ]
+   },
+   {
+    "id": "alerts",
+    "say": "If there's a problem, an alert pops up in the bottom right corner. It says what's wrong, and what to do about it. Press X to close it.",
+    "do": [],
+    "blur": true,
+    "card": {
+     "title": "ALERTS, BOTTOM RIGHT",
+     "rows": [
+      {
+       "text": "A problem pops up in the corner",
+       "at": "corner"
+      },
+      {
+       "text": "It says what's wrong and what to do",
+       "at": "says"
+      },
+      {
+       "text": "Press X to close it",
+       "at": "X"
+      }
+     ]
+    }
+   },
+   {
+    "id": "why",
+    "do": [
+     {
+      "nav": "Dashboard",
+      "after": 2000
+     }
+    ],
+    "say": "Bot not trading? Open Dashboard, and read Why isn't it trading. Each red line is something to fix.",
+    "hl": [
+     {
+      "find": {
+       "has": "Why isn",
+       "up": 1
+      },
+      "at": "Why"
+     }
+    ]
+   },
+   {
+    "id": "support",
+    "do": [
+     {
+      "nav": "Settings",
+      "after": 1500
+     },
+     {
+      "scrollTo": {
+       "t": "Replay onboarding"
+      }
+     }
+    ],
+    "say": "And Settings has the app's preferences, plus a replay of this setup whenever you want it.",
+    "hl": [
+     {
+      "find": {
+       "t": "Replay onboarding"
+      },
+      "at": "replay"
+     }
+    ]
+   }
+  ]
+ },
+ {
+  "id": "extras",
+  "title": "Agent Hub and your phone",
+  "blurb": "Watch your AI as a game, and check on it from your phone.",
+  "start": [
+   {
+    "nav": "Agent Hub",
+    "after": 3000
+   }
+  ],
+  "scenes": [
+   {
+    "id": "hub",
+    "say": "Agent Hub shows what your agents are doing, as a little casino. It's staged for fun, but the numbers on it are real. Every call your AI makes shows up here.",
+    "hl": [
+     {
+      "find": {
+       "nav": "Agent Hub"
+      },
+      "at": "Agent"
+     }
+    ]
+   },
+   {
+    "id": "remote",
+    "do": [
+     {
+      "nav": "Remote",
+      "after": 1500
+     }
+    ],
+    "say": "Remote lets you check on the app from your phone, through Discord or Telegram. Keep this computer on, with the app open.",
+    "hl": [
+     {
+      "find": {
+       "nav": "Remote"
+      },
+      "at": "Remote"
+     }
+    ]
+   },
+   {
+    "id": "warn",
+    "say": "Before you turn it on, read this. A chat bot means your positions and profit go through that chat service, and only accounts you pair can use it.",
+    "hl": [
+     {
+      "find": {
+       "has": "BEFORE YOU TURN THIS ON",
+       "up": 1
+      },
+      "at": "read"
+     }
+    ]
+   }
+  ]
+ }
+]
