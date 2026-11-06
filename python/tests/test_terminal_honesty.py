@@ -510,7 +510,10 @@ def _venue_says(monkeypatch, replies, *, coefficient=0.07):
         return [{"conditionId": c, "title": "T", "category": "crypto",
                  "_raw": {} if coefficient is None else {"feeCoefficient": coefficient}}
                 for c in ids]
+    async def _no_trades(limit=500, *, user=None, market=""):
+        return []
     monkeypatch.setattr(tt.api, "get_order", _get_order)
+    monkeypatch.setattr(tt.api, "get_activity", _no_trades)
     monkeypatch.setattr(tt.term, "_summaries_for", _summaries)
     monkeypatch.setattr(tt.auth, "credentials_present", lambda env=None: True)
     return asked

@@ -647,6 +647,11 @@ def activity_row(a: Any) -> Optional[dict]:
             return None
         qty = abs(to_float(tr.get("qtyDecimal"), to_float(tr.get("qty"))))
         px = amount(tr.get("price")) or 0.0
+        # The docs don't list these, but every live trade has one execution per side.
+        # Ours is the aggressor's when we took. The other side is a stranger's order.
+        ex = tr.get("aggressorExecution" if tr.get("isAggressor") else "passiveExecution")
+        ex = ex if isinstance(ex, dict) else {}
+        order = ex.get("order") if isinstance(ex.get("order"), dict) else {}
         return {
             "type": "TRADE",
             "id": str(tr.get("id") or ""),
@@ -655,6 +660,11 @@ def activity_row(a: Any) -> Optional[dict]:
             "price": px,
             "usdcSize": qty * px,
             "timestamp": parse_iso_epoch(tr.get("createTime")) or 0,
+            "orderId": str(order.get("id") or ""),
+            "orderShares": abs(to_float(ex.get("lastShares"))),
+            "fillTime": str(ex.get("transactTime") or tr.get("createTime") or ""),
+            # None when the execution has no figure: not the same as no fee.
+            "feeUsd": amount(ex.get("commissionNotionalCollected")),
             "realizedPnl": amount(tr.get("realizedPnl")) or 0.0,
             "isAggressor": bool(tr.get("isAggressor")),
         }

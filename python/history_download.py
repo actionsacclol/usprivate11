@@ -61,8 +61,12 @@ _QUOTE_KNOWN_AFTER_SEC = 60
 _LOOKBACK_MIN = crypto15m._INDICATOR_LOOKBACK_MIN
 
 _KV_JOB = "history_download_job"
-# This many windows in a row with no answer means an outage or the end of the history.
+# This many windows in a row with no answer is worth asking whether the venue is down.
 _MISS_STREAK = 30
+# With no outage, the venue's history can still have gaps: on 2026-11-05 about 30 windows
+# in a row were missing with older ones readable behind them. Only a day of nothing, across
+# all four coins, means the history has ended.
+_END_STREAK = 400
 _OUTAGE_WAIT_SEC = 30.0
 _OUTAGE_MAX_WAITS = 20
 _RESUME_DELAY_SEC = 20.0
@@ -384,6 +388,10 @@ async def _run(days: int, intervals: list[str], delay: float = 0.0) -> None:
                         queue.appendleft(w)
                         continue
                     if not api.api_outages():
+                        if misses["streak"] < _END_STREAK:
+                            _status["done"] += 1    # a gap, not an outage: older windows may follow
+                            _status["unavailable"] += 1
+                            continue
                         # The venue answers, it just has nothing this old. That's the end.
                         misses["stop"] = "ended"
                         return

@@ -990,6 +990,9 @@ def _init_db_schema() -> None:
         for migration in [
             "ALTER TABLE bot_positions ADD COLUMN closed_early INTEGER DEFAULT 0",
             "ALTER TABLE terminal_paper_orders ADD COLUMN book TEXT DEFAULT 'manual'",
+            # 1 once filled_at comes from the venue's own trade rows. 0 means it is
+            # only when a reconcile pass first saw the fill.
+            "ALTER TABLE terminal_fills ADD COLUMN filled_at_exact INTEGER DEFAULT 0",
             "ALTER TABLE alerts ADD COLUMN yes_sub_title TEXT DEFAULT ''",
             "ALTER TABLE bot_runs ADD COLUMN start_trades_opened INTEGER DEFAULT 0",
             "ALTER TABLE bot_runs ADD COLUMN start_trades_won INTEGER DEFAULT 0",

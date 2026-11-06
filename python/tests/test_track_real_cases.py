@@ -134,7 +134,11 @@ def test_a_fill_is_filed_under_the_side_it_was_sent_for(monkeypatch, fresh_db):
         # Nothing in the reply decides the side. It may not even carry an intent.
         return {"order": {"id": oid, "status": "matched", "size_matched": 10.0,
                           "price": 0.40, "side": "yes", "fee_usd": 0.1, "created_at": ""}}
+
+    async def _no_trades(limit=500, *, user=None, market=""):
+        return []
     monkeypatch.setattr(tt.api, "get_order", _get_order)
+    monkeypatch.setattr(tt.api, "get_activity", _no_trades)
     monkeypatch.setattr(tt.auth, "credentials_present", lambda env=None: True)
     _run(tt.reconcile_fills())
 

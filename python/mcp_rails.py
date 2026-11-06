@@ -956,6 +956,7 @@ async def _live_day_pnl(day: str) -> dict:
     drops out after (that result was yesterday's)."""
     import db
     import terminal as term
+    import terminal_trade
     with db.get_db() as conn:
         fills = conn.execute(
             "SELECT f.condition_id, f.side, f.action, f.size, f.price_cents, "
@@ -965,7 +966,7 @@ async def _live_day_pnl(day: str) -> dict:
             "WHERE f.order_id IN (SELECT order_id FROM mcp_orders o WHERE "
             + _LIVE_SENT_SQL + " AND mode='live' AND network=? "
             "  AND order_id IS NOT NULL) "
-            "ORDER BY f.filled_at ASC", (_net(),)).fetchall()
+            f"ORDER BY {terminal_trade.FILL_REPLAY_ORDER}", (_net(),)).fetchall()
     pos: dict[tuple, dict] = {}
     realized = 0.0
     for f in fills:

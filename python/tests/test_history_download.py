@@ -327,11 +327,35 @@ def test_running_out_of_history_ends_the_job_quietly(fresh_db, monkeypatch):
     monkeypatch.setattr(api, "api_outages", dict)
     venue = _FakeVenue()
     venue.get = nothing
-    _run_job(monkeypatch, venue, [_window(i) for i in range(hd._MISS_STREAK + 50)])
+    _run_job(monkeypatch, venue, [_window(i) for i in range(hd._END_STREAK + 50)])
     st = hd.status()
     assert st["status"] == "done"
     assert st["message"] == "Polymarket US has nothing older."
     assert hd._load_job() is None
+
+
+def test_a_gap_in_the_venues_history_does_not_end_the_job(fresh_db, monkeypatch):
+    """A stretch of missing windows with older ones behind it, as on 2026-11-05. Stopping
+    there told the user nothing older existed and left a 7-day download with one day."""
+    _patch_normalize(monkeypatch)
+    monkeypatch.setattr(api, "api_outages", dict)
+    # Twice the streak: a save still finishing can reset the count early in the gap.
+    gap = range(5, 5 + hd._MISS_STREAK * 2)
+    missing = {_window(i)["slug"] for i in gap}
+    venue = _FakeVenue()
+    real = venue.get
+
+    async def gappy(url, params=None, **kw):
+        if url.rsplit("/", 1)[-1] in missing:
+            return None
+        return await real(url, params=params, **kw)
+    venue.get = gappy
+    windows = [_window(i) for i in range(gap.stop + 5)]
+    _run_job(monkeypatch, venue, windows)
+    st = hd.status()
+    assert (st["status"], st["message"]) == ("done", None)
+    assert st["saved"] == len(windows) - len(missing)
+    assert st["unavailable"] == len(missing)
 
 
 def test_an_outage_stops_and_keeps_the_job_for_the_next_start(fresh_db, monkeypatch):

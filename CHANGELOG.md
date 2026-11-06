@@ -4,6 +4,39 @@ All notable changes to this project are documented here.
 
 ## [Unreleased]
 
+## [0.3.0] — 2026-11-06
+
+### Live history matches the exchange
+Fill times and fees now come from the exchange's own record of each trade. Resting orders used to
+show when the app first noticed the fill, and fills with no fee showed the fee as unknown. A sale in
+the same second as its buy could be dropped, so a market you sold looked held to settlement; that sale
+now counts. An AI agent can see which fill times are exact.
+
+### Selling and account value
+When the price feed is behind, a sell is checked against a fresh quote before it's refused. A market
+quote that may be minutes old no longer prices an order. The portfolio value is now read from your
+positions. The exchange's own figure read 0 with positions open, so every fill looked like a loss.
+
+### Daily loss stop
+The stop now counts realised losses: closes, settlements and fees. An open position counts once its
+market closes, so a falling position that's still open no longer trips it.
+
+### Results and AI agents
+A closed market's outcome is checked again within about 15 seconds. An outcome one screen learns now
+reaches the other. `get_market` includes the settlement rules, and the tool descriptions say what
+each P&L figure means.
+
+### History download
+The download no longer stops at a gap in Polymarket's history. A short stretch of missing windows
+ended the whole job with "Polymarket US has nothing older", so a 7-day download could finish with
+one day of data. It now carries on and only stops after about a day of nothing.
+
+### Builds
+Automated builds use the Python version the workflow asks for. Before, a newer Python on the build
+machine could produce a Windows backend that failed to load.
+
+## [0.1.0] — 2026-11-05
+
 ### Leftover shortcuts removed
 The installed app no longer reloads on Ctrl+R, zooms on Ctrl+minus, goes full screen on F11 or hides
 to the tray on Ctrl+W. Those came from a default menu the app never showed. Copy and paste still work.

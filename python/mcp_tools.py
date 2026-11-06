@@ -522,7 +522,11 @@ async def _record_forecast(a: dict) -> dict:
       "(default unless you trade live) is YOUR paper account; mode=live is the "
       "real account — everything in it, whoever placed it; only what YOUR "
       "orders filled is yours to sell (sellableShares). reconcile=true (live) "
-      "first pulls fresh fills from Polymarket's own ledger.",
+      "first pulls fresh fills from Polymarket's own ledger. realizedPnlUsd is "
+      "before fees: sales plus settlements, across the whole ledger. "
+      "settledPnlUsd is its settlement part, and realizedPnlNetUsd is it after "
+      "fees (null while any fee is unknown). None of them is the cash change: "
+      "cash also moves with open positions, deposits and withdrawals.",
       props={"mode": _MODE, "reconcile": {"type": "boolean"}}, read_only=True)
 async def _get_portfolio(a: dict) -> dict:
     cfg = _cfg()
@@ -570,10 +574,13 @@ async def _get_orders(a: dict) -> dict:
 
 
 @tool("get_trade_history", "Trade history",
-      "Live-account history. kind=fills: the venue's own fill ledger. "
+      "Live-account history. kind=fills: the venue's own fill ledger; ts is the "
+      "last trade's time when tsExact is true, otherwise only when a reconcile "
+      "saw the fill. A null feeUsd is not yet known, not free. "
       "kind=order_log: every order sent from this app including failures, "
       "with origin (ai = you). kind=settled: resolved positions and the real "
-      "win/loss record.",
+      "win/loss record; totals.pnlUsd is after fees and covers only finished "
+      "markets, and pnlMissingRows counts the rows it leaves out.",
       props={"kind": {"type": "string", "enum": ["fills", "order_log", "settled"]},
              "limit": _LIMIT},
       required=("kind",), read_only=True)

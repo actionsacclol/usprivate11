@@ -1959,11 +1959,9 @@ def _order_fee_usd(view: dict, order_type: str, size: float, price_cents: float,
       1. The venue's own figure, when it reports one above zero.
       2. A FAK or FOK can only ever take, so the fee curve applies. It needs the
          market's coefficient; without the market it is unknown for now.
-      3. A GTC with nothing reported is UNKNOWABLE from what the venue returns.
-         It may have rested and filled as a maker (0 at the base tier) or crossed
-         on arrival (the curve), and the order record does not say which. Not 0
-         and not the curve, because either would be a number nobody produced.
-         The ledger carries NULL, and the totals say they are gross of it.
+      3. A GTC with nothing reported is UNKNOWN from the order record alone: it may
+         have rested (0 at the base tier) or crossed (the curve). The ledger carries
+         NULL until _true_up_fills reads what its executions actually paid.
     """
     reported = num(view.get("fee_usd"))
     if reported is not None and reported > 0:
@@ -1971,6 +1969,93 @@ def _order_fee_usd(view: dict, order_type: str, size: float, price_cents: float,
     if str(order_type).upper() in ("FAK", "FOK") and raw_market is not None:
         return taker_fee_usd(price_cents, size, api._fee_schedule_from_gamma(raw_market))
     return None
+
+
+# ── true-up: when a fill really happened, and whether it took ───────────────
+#
+# An order's record has no fill time, and its commission of 0 can't say whether
+# the order rested or just has nothing posted yet, so reconcile_fills alone leaves
+# a reconcile-time stamp and a NULL fee. The account's trade rows have what's
+# missing: each names our order, when it executed and what that execution paid.
+
+_TRUE_UP_MAX_MARKETS = 10
+_TRUE_UP_RETRY_SEC = 60.0
+_true_up_tried: dict[str, float] = {}
+
+# Oldest first for a cost-basis replay of `terminal_fills f`. julianday, because
+# as text "…:34Z" sorts after "…:34.77Z". A time that is not exact yet is when a
+# reconcile pass saw the fill, which can be after a sale of those contracts, so
+# the order's send time stands in. A tie is a buy first: you sell what you hold.
+FILL_REPLAY_ORDER = (
+    "CASE WHEN f.filled_at_exact=1 THEN julianday(f.filled_at) ELSE julianday(COALESCE("
+    "(SELECT MIN(o.created_at) FROM terminal_orders o WHERE o.order_id=f.order_id), "
+    "f.filled_at)) END, f.action='sell'")
+
+
+def _executions_by_order(rows: list[dict]) -> dict[str, dict]:
+    """The account's trade rows totalled per order: {orderId: {size, feeUsd, fillTime}}.
+    feeUsd is None if any execution has no figure. fillTime is the last execution's."""
+    out: dict[str, dict] = {}
+    for r in rows:
+        oid = str(r.get("orderId") or "")
+        if r.get("type") != "TRADE" or not oid:
+            continue
+        e = out.setdefault(oid, {"size": 0.0, "feeUsd": 0.0, "fillTime": ""})
+        e["size"] += float(r.get("orderShares") or 0.0)
+        fee = r.get("feeUsd")
+        e["feeUsd"] = None if fee is None or e["feeUsd"] is None else e["feeUsd"] + float(fee)
+        e["fillTime"] = max(e["fillTime"], str(r.get("fillTime") or ""))
+    return out
+
+
+async def _true_up_market(cid: str) -> None:
+    """Give one market's fills their real time and the venue's own fee. A fill whose
+    trade rows don't add up to it yet is left alone for a later pass."""
+    with _conn() as conn:
+        fills = [dict(r) for r in conn.execute(
+            "SELECT trade_id, order_id, size FROM terminal_fills "
+            "WHERE condition_id=? AND trade_id LIKE 'order:%'", (cid,)).fetchall()]
+    executed = _executions_by_order(await api.get_activity(limit=200, market=cid))
+    with _conn() as conn:
+        for f in fills:
+            e = executed.get(str(f["order_id"]))
+            if not e or abs(e["size"] - float(f["size"])) > 1e-6 or not e["fillTime"]:
+                continue
+            fee = None if e["feeUsd"] is None else round(e["feeUsd"], 4)
+            # `size` guards against a pass that saw more of this order fill meanwhile.
+            conn.execute(
+                "UPDATE terminal_fills SET filled_at=?, filled_at_exact=1, "
+                "fees_usd=COALESCE(?, fees_usd) WHERE trade_id=? AND size=?",
+                (e["fillTime"], fee, f["trade_id"], f["size"]))
+            conn.execute(
+                "UPDATE terminal_orders SET fees_usd=COALESCE(?, fees_usd) WHERE order_id=?",
+                (fee, f["order_id"]))
+
+
+async def _true_up_fills() -> None:
+    """Newest first, a few markets a pass, so an old ledger catches up over several
+    passes. Each market waits a minute before another try: a fresh fill's trade row
+    can lag it, and one that never matches must not cost a read on every pass."""
+    _resolution_scope_check()
+    with _conn() as conn:
+        stale = [str(r[0]) for r in conn.execute(
+            "SELECT condition_id FROM terminal_fills WHERE trade_id LIKE 'order:%' "
+            "AND (filled_at_exact=0 OR fees_usd IS NULL) "
+            "GROUP BY condition_id ORDER BY MAX(filled_at) DESC").fetchall()]
+    now = time.monotonic()
+    due = [c for c in stale
+           if c not in _true_up_tried or now - _true_up_tried[c] > _TRUE_UP_RETRY_SEC]
+    slots = asyncio.Semaphore(_RECONCILE_CONCURRENCY)
+
+    async def one(cid: str) -> None:
+        _true_up_tried[cid] = now
+        async with slots:
+            try:
+                await _true_up_market(cid)
+            except Exception as e:  # noqa: BLE001 — unread stays unknown, and retried
+                logger.debug("fill true-up failed for %s: %s", cid, e)
+
+    await asyncio.gather(*[one(c) for c in due[:_TRUE_UP_MAX_MARKETS]])
 
 
 async def reconcile_fills(limit: int = 0) -> dict:
@@ -2081,7 +2166,8 @@ async def reconcile_fills(limit: int = 0) -> dict:
                 # When it filled. A FAK or FOK fills on arrival, so its creation
                 # time is right. A GTC can fill any time after it rests and the
                 # order record has no fill time, so the first pass that sees a
-                # fill stamps it: approximate, and never rewritten below.
+                # fill stamps it. _true_up_fills replaces either with the trade's
+                # own time.
                 filled_at = (str(view.get("created_at") or "") or now
                              if order_type in ("FAK", "FOK") else now)
                 tid = f"order:{oid}"
@@ -2093,9 +2179,15 @@ async def reconcile_fills(limit: int = 0) -> dict:
                         filled_at)
                        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
                        ON CONFLICT(trade_id) DO UPDATE SET
+                         -- More of the order filled: what the true-up found no
+                         -- longer describes it. Same size: keep what it found.
+                         fees_usd = CASE
+                           WHEN excluded.fees_usd IS NULL AND size = excluded.size
+                           THEN fees_usd ELSE excluded.fees_usd END,
+                         filled_at_exact = CASE
+                           WHEN size = excluded.size THEN filled_at_exact ELSE 0 END,
                          size = excluded.size,
                          price_cents = excluded.price_cents,
-                         fees_usd = excluded.fees_usd,
                          cost_usd = excluded.cost_usd""",
                     # Side and action from our own row, not the reply: we asked
                     # for them, and a reply with no intent would read as YES.
@@ -2151,6 +2243,8 @@ async def reconcile_fills(limit: int = 0) -> dict:
     except Exception as e:  # noqa: BLE001
         logger.debug("reconcile: agent unknown-order promotion failed: %s", e)
 
+    await _true_up_fills()
+
     # No silent caps: if the pass stopped early, SAY so. A truncated pass that
     # reports success reads as "everything is reconciled" when it is not.
     notes = []
@@ -2200,9 +2294,9 @@ def _ledger_basis() -> dict[tuple[str, str], dict]:
     out: dict[tuple[str, str], dict] = {}
     with _conn() as conn:
         rows = conn.execute(
-            "SELECT condition_id, side, action, size, price_cents, "
-            "COALESCE(fees_usd,0) fee, fees_usd raw_fee "
-            "FROM terminal_fills ORDER BY filled_at ASC"
+            "SELECT f.condition_id, f.side, f.action, f.size, f.price_cents, "
+            "COALESCE(f.fees_usd,0) fee, f.fees_usd raw_fee "
+            f"FROM terminal_fills f ORDER BY {FILL_REPLAY_ORDER}"
         ).fetchall()
     for r in rows:
         key = (str(r["condition_id"]), str(r["side"]))
@@ -2248,6 +2342,19 @@ _RESOLVED_KV_PREFIX = "terminal:resolved:"
 # How long a "still open / could not tell" answer is allowed to suppress the
 # next lookup. Short, because that answer DOES change.
 _RESOLUTION_MISS_TTL = 300.0
+# The same, once a market has closed and its outcome can post at any moment.
+_RESOLVING_MISS_TTL = 15.0
+
+
+def _miss_stamp(m: dict, now: float) -> float:
+    """The time to record a market's miss at, backdated so it expires when the
+    answer can change: at most a short wait once it closes, not five minutes after
+    a market that closed (or was about to) was last seen unresolved."""
+    close = us.parse_iso_epoch(m.get("closeTime"))
+    if close is None:
+        return now
+    wait = max(_RESOLVING_MISS_TTL, min(_RESOLUTION_MISS_TTL, close - time.time()))
+    return now + wait - _RESOLUTION_MISS_TTL
 
 
 def _miss_expired(missed_at, now: float) -> bool:
@@ -2288,6 +2395,7 @@ def _resolution_scope_check() -> None:
         _resolution_misses.clear()
         _market_meta_mem.clear()
         _meta_misses.clear()
+        _true_up_tried.clear()
 
 
 def _resolutions_cached() -> dict[str, str]:
@@ -2365,7 +2473,7 @@ async def _resolutions_for(condition_ids) -> dict[str, Optional[str]]:
                 if cid in out:
                     out[cid] = r
             else:
-                _resolution_misses[cid] = now
+                _resolution_misses[cid] = _miss_stamp(m, now)
         for cid in chunk:
             if cid not in seen:
                 _resolution_misses[cid] = now
@@ -2435,9 +2543,12 @@ async def _market_meta_for(condition_ids) -> dict[str, dict]:
     out: dict[str, dict] = {c: dict(v) for c, v in _market_meta_cached().items()
                             if c in want}
     now = time.monotonic()
+    # An outcome the portfolio's lookup already learned overrides a miss here, or
+    # the two screens would count the same market differently.
+    resolved = _resolutions_cached()
     missing = [c for c in ids
                if c not in out
-               and _miss_expired(_meta_misses.get(c), now)]
+               and (c in resolved or _miss_expired(_meta_misses.get(c), now))]
     for i in range(0, len(missing), 20):
         chunk = missing[i:i + 20]
         try:
@@ -2464,7 +2575,7 @@ async def _market_meta_for(condition_ids) -> dict[str, dict]:
                 out[cid] = entry
             else:
                 # Still open: worth showing the labels, not worth caching.
-                _meta_misses[cid] = now
+                _meta_misses[cid] = _miss_stamp(m, now)
                 out[cid] = entry
         for cid in chunk:
             if cid not in seen:
@@ -3258,6 +3369,8 @@ def fills(limit: int = 100) -> dict:
             "feeUsd": (float(r["fees_usd"]) if r["fees_usd"] is not None else None),
             "costUsd": (float(r["cost_usd"]) if r["cost_usd"] is not None else None),
             "ts": str(r["filled_at"]),
+            # False: `ts` is when a reconcile pass saw the fill, not when it happened.
+            "tsExact": bool(r["filled_at_exact"]),
             "reconciled": True,
             "origin": str(r["origin"] or "unknown"),
             "source": "ledger",
