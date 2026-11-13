@@ -53,10 +53,10 @@ script_audit.pin_recursion_limit()
 
 MAX_CODE_BYTES = 128 * 1024
 HOOK_NAMES = ("decide", "decide_market", "manage", "decide_signal",
-              "supervise", "on_start", "on_fill", "on_settle")
+              "supervise", "quote", "on_start", "on_fill", "on_settle")
 # A script must define at least one of these to DO anything.
 ENTRY_HOOKS = ("decide", "decide_market", "manage", "decide_signal",
-               "supervise")
+               "supervise", "quote")
 
 # Names injected into every script's globals. Scripts may `import` anything
 # they like now; these stay because they cover the common cases without a
@@ -165,7 +165,7 @@ def validate(code: str) -> list[str]:
     if not defined & set(ENTRY_HOOKS):
         return ["script must define at least one of: decide(ctx), "
                 "decide_market(market), manage(position, ctx), "
-                "decide_signal(signal), supervise(app)"]
+                "decide_signal(signal), supervise(app), quote(ctx)"]
     # The engine calls hooks synchronously; a coroutine function would return
     # an un-awaited coroutine that silently does nothing. Catch it at save.
     async_hooks = sorted(
@@ -321,7 +321,7 @@ class CompiledScript:
         if not set(self.hooks) & set(ENTRY_HOOKS):
             raise ScriptError(
                 "script must define at least one of: decide, decide_market, "
-                "manage, decide_signal, supervise")
+                "manage, decide_signal, supervise, quote")
 
     def drain_logs(self) -> list[str]:
         out = self._log_lines[:]

@@ -38,7 +38,7 @@ import logging
 import math
 import re
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Iterable, Optional
 
 import polymarket_api as api
@@ -1184,7 +1184,19 @@ def _live_quote(token_id: Optional[str]) -> Optional[dict]:
     ask = _sentinel_free(num(q.get("ask_cents")))
     if bid is None and ask is None:
         return None
-    return {"bid_cents": bid, "ask_cents": ask}
+    # When the feed last heard about this book. It is served for up to 12
+    # seconds after that, and a quote that old was being stamped "0 seconds".
+    try:
+        age = clob_ws.feed.quote_age_sec(token_id)
+    except Exception:
+        age = None
+    return {"bid_cents": bid, "ask_cents": ask, "age_sec": age}
+
+
+def _iso_ago(sec: Optional[float]) -> str:
+    """The UTC second `sec` seconds ago, for a quote's observedAt."""
+    at = datetime.now(timezone.utc) - timedelta(seconds=float(sec or 0.0))
+    return at.isoformat(timespec="seconds").replace("+00:00", "Z")
 
 
 def _overlay_live(summary: dict) -> dict:
@@ -1200,8 +1212,9 @@ def _overlay_live(summary: dict) -> dict:
     bid, ask = num(q.get("bid_cents")), num(q.get("ask_cents"))
     if bid is None and ask is None:
         return summary
-    obs = _now_iso()
-    stamp = {"source": "clob-ws", "observedAt": obs, "ageSec": 0.0}
+    age = round(float(q.get("age_sec") or 0.0), 1)
+    obs = _iso_ago(age)
+    stamp = {"source": "clob-ws", "observedAt": obs, "ageSec": age}
     if bid is not None:
         summary["bid"] = bid
         summary["sources"]["bid"] = dict(stamp)
@@ -1212,11 +1225,11 @@ def _overlay_live(summary: dict) -> dict:
     if b is not None and a is not None:
         summary["spread"] = round(a - b, 2)
         summary["mid"] = round((a + b) / 2.0, 2)
-        summary["sources"]["spread"] = {"source": "local", "observedAt": obs, "ageSec": 0.0}
-        summary["sources"]["mid"] = {"source": "local", "observedAt": obs, "ageSec": 0.0}
+        summary["sources"]["spread"] = {"source": "local", "observedAt": obs, "ageSec": age}
+        summary["sources"]["mid"] = {"source": "local", "observedAt": obs, "ageSec": age}
         summary["probability"] = summary["mid"]
         summary["sources"]["probability"] = {
-            "source": "clob-ws", "observedAt": obs, "ageSec": 0.0}
+            "source": "clob-ws", "observedAt": obs, "ageSec": age}
         summary["unknowns"] = [u for u in summary.get("unknowns", [])
                                if u["field"] not in ("spread", "probability")]
     return summary
@@ -1957,7 +1970,7 @@ async def clob_quotes(rows: list[dict]) -> list[dict]:
             continue
         q = _live_quote(r.get("yesTokenId"))
         if q and q.get("bid_cents") is not None and q.get("ask_cents") is not None:
-            _put_quote(r, q["bid_cents"], q["ask_cents"], "clob-ws", _now_iso())
+            _put_quote(r, q["bid_cents"], q["ask_cents"], "clob-ws", _iso_ago(q.get("age_sec")))
             continue
         need.setdefault(str(slug), []).append(r)
     if need:

@@ -4,7 +4,7 @@
 //   npm run py:orders                  one post-only order, cancelled. Cost: $0
 //   npm run py:orders -- --with-fill   also real small fills (real money)
 //
-// Unlocks buying NO. Never run by `npm run py:test` or CI. See python/live_order_check.py.
+// Never run by `npm run py:test` or CI. See python/live_order_check.py.
 import { ensureVenv, run, VENV_PY } from './python-utils.mjs';
 
 ensureVenv();

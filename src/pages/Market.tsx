@@ -886,6 +886,9 @@ function Ticket({
   const [price, setPrice] = useState('');
   const [size, setSize] = useState('');
   const [orderType, setOrderType] = useState<OrderType>(DEFAULT_ORDER_TYPE);
+  // Rest or be refused, never take. Only a resting (GTC) order can be post-only.
+  const [postOnlyWanted, setPostOnlyWanted] = useState(false);
+  const postOnly = postOnlyWanted && orderType === 'GTC';
   const [preview, setPreview] = useState<ManualOrderPreview | null>(null);
   // The preview the user actually READ when they pressed Review. The live
   // preview keeps re-quoting behind the panel; the confirmation is a contract
@@ -961,8 +964,9 @@ function Ticket({
   const req = useMemo(() => (conditionId && priceNum !== null && sizeNum !== null ? {
     conditionId, side, action,
     priceCents: priceNum, size: sizeNum, orderType,
+    ...(postOnly ? { postOnly: true } : {}),
     confirmUsd: 0, paper,
-  } : null), [conditionId, side, action, priceNum, sizeNum, orderType, paper]);
+  } : null), [conditionId, side, action, priceNum, sizeNum, orderType, postOnly, paper]);
 
   const reqRef = useRef(req);
   reqRef.current = req;
@@ -1120,6 +1124,21 @@ function Ticket({
               </button>
             ))}
           </div>
+
+          {orderType === 'GTC' && (
+            <label className="flex cursor-pointer items-start gap-2 text-[11px] text-krypt-muted"
+              title="Sent to the exchange as an order that may only add to the book. If the price would trade right away, it is refused and nothing is sent.">
+              <input
+                type="checkbox" checked={postOnlyWanted}
+                onChange={(e) => setPostOnlyWanted(e.target.checked)}
+                className="mt-0.5 accent-krypt-purple"
+              />
+              <span>
+                <span className="text-white">Post-only</span>: rest on the book or be
+                refused, never take. A fill pays no fee.
+              </span>
+            </label>
+          )}
 
           {action === 'sell' && (
             <Note>

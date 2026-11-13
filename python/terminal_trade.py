@@ -317,6 +317,9 @@ async def preview(req: dict) -> dict:
     req_price = num(req.get("priceCents"))
     req_size = num(req.get("size"))
     order_type = str(req.get("orderType") or "GTC").upper()
+    # Post-only: the order may rest and may never take. The exchange rejects it
+    # rather than let it cross, so a fill is always a maker fill and pays no fee.
+    post_only = bool(req.get("postOnly"))
     # Paper mode needs no API key — practising BEFORE funding anything is the
     # entire point. Threaded through the request rather than string-matched on
     # the resulting message, so there is one source of truth for what blocks a
@@ -336,6 +339,7 @@ async def preview(req: dict) -> dict:
         # it as the reference price in the message a resting order gets back.
         "bestBidCents": None, "bestAskCents": None,
         "crossesNow": None,
+        "postOnly": post_only,
         # What the account can actually spend. None = we do not know, which is
         # a different sentence from $0.00 and never blocks the ticket.
         "availableUsd": None,
@@ -357,6 +361,11 @@ async def preview(req: dict) -> dict:
         return out
     if order_type not in ("GTC", "FAK", "FOK"):
         out["blockers"].append(f"Unsupported order type {order_type}.")
+        return out
+    if post_only and order_type != "GTC":
+        out["blockers"].append(
+            f"Post-only needs a resting (GTC) order. {order_type} trades right away "
+            f"or not at all, so it can't be post-only.")
         return out
     if req_size > MAX_MANUAL_CONTRACTS:
         out["blockers"].append(
@@ -423,19 +432,30 @@ async def preview(req: dict) -> dict:
     bk = await term.book(cid, side)
     live_bid, live_ask = term.live_touch(summary, side)
     stale = None
-    if bk.get("available"):
-        # The touch comes from the market read, which the CDN does not cache; the
-        # book's levels can be 30 seconds behind it. Only the depth comes from the
-        # snapshot, and only when the market read had no quote does the touch.
-        out["bestBidCents"] = live_bid if live_bid is not None else num(bk.get("bestBid"))
-        out["bestAskCents"] = live_ask if live_ask is not None else num(bk.get("bestAsk"))
-        # Does this price CROSS, or is it an offer? The single distinction the
-        # owner's live test turned on: a buy at 14¢ against a 15¢ ask is not a
-        # purchase, it is a bid nobody has to take.
-        touch = out["bestAskCents"] if action == "buy" else out["bestBidCents"]
-        if touch is not None:
-            out["crossesNow"] = (snapped >= touch if action == "buy"
-                                 else snapped <= touch)
+    # The touch comes from the market read, which the CDN does not cache; the
+    # book's levels can be 30 seconds behind it. Only the depth comes from the
+    # snapshot, and only when the market read had no quote does the touch. So
+    # the touch does not wait on the book: a new window's book isn't served for
+    # its first minutes, and an order placed then was told "we could not read
+    # the touch" with a live 34/35¢ quote in hand (live 2026-11-06).
+    has_book = bool(bk.get("available"))
+    out["bestBidCents"] = live_bid if live_bid is not None else (
+        num(bk.get("bestBid")) if has_book else None)
+    out["bestAskCents"] = live_ask if live_ask is not None else (
+        num(bk.get("bestAsk")) if has_book else None)
+    # Does this price CROSS, or is it an offer? The single distinction the
+    # owner's live test turned on: a buy at 14¢ against a 15¢ ask is not a
+    # purchase, it is a bid nobody has to take.
+    touch = out["bestAskCents"] if action == "buy" else out["bestBidCents"]
+    if touch is not None:
+        out["crossesNow"] = (snapped >= touch if action == "buy"
+                             else snapped <= touch)
+    if post_only and out["crossesNow"]:
+        out["blockers"].append(
+            f"Post-only: {snapped:g}¢ would trade right away against the best "
+            f"{'ask' if action == 'buy' else 'bid'} of {touch:g}¢. "
+            f"{'Lower' if action == 'buy' else 'Raise'} the price, or turn post-only off.")
+    if has_book:
         levels = bk["asks"] if action == "buy" else bk["bids"]
         stale = _book_behind(bk, live_bid, live_ask)
         if stale:
@@ -523,6 +543,9 @@ async def preview(req: dict) -> dict:
             "We could not determine this market's fee rate, so the cost above "
             "EXCLUDES fees. Taker fees on Polymarket run up to ~1.75¢ per "
             "share at even odds.")
+    elif post_only:
+        # It can only ever fill as the maker.
+        out["feeUsd"] = 0.0
     else:
         out["feeUsd"] = fee
         if order_type == "GTC":
@@ -783,6 +806,7 @@ async def place(req: dict, *, origin: str = "manual",
             ticker=cid, side=side, action=action, count=size,
             price_cents=price_cents, order_type=order_type,
             client_order_id=f"term_{uuid.uuid4().hex[:12]}",
+            **({"post_only": True} if pv.get("postOnly") else {}),
         )
     except api.OrderStatusUnknownError as e:
         # Sent, but neither the reply nor a lookup says what became of it. The
@@ -1993,19 +2017,33 @@ FILL_REPLAY_ORDER = (
 
 
 def _executions_by_order(rows: list[dict]) -> dict[str, dict]:
-    """The account's trade rows totalled per order: {orderId: {size, feeUsd, fillTime}}.
-    feeUsd is None if any execution has no figure. fillTime is the last execution's."""
+    """The account's trade rows totalled per order:
+    {orderId: {size, feeUsd, fillTime, takerSize}}. feeUsd is None if any execution
+    has no figure. fillTime is the last execution's. takerSize is how much of the
+    order took liquidity (the exchange's own isAggressor on each trade)."""
     out: dict[str, dict] = {}
     for r in rows:
         oid = str(r.get("orderId") or "")
         if r.get("type") != "TRADE" or not oid:
             continue
-        e = out.setdefault(oid, {"size": 0.0, "feeUsd": 0.0, "fillTime": ""})
-        e["size"] += float(r.get("orderShares") or 0.0)
+        e = out.setdefault(oid, {"size": 0.0, "feeUsd": 0.0, "fillTime": "", "takerSize": 0.0})
+        shares = float(r.get("orderShares") or 0.0)
+        e["size"] += shares
+        if r.get("isAggressor"):
+            e["takerSize"] += shares
         fee = r.get("feeUsd")
         e["feeUsd"] = None if fee is None or e["feeUsd"] is None else e["feeUsd"] + float(fee)
         e["fillTime"] = max(e["fillTime"], str(r.get("fillTime") or ""))
     return out
+
+
+def _liquidity(e: dict) -> str:
+    """maker | taker | mixed for one order's executions. A resting order the
+    market moved into is a taker for the part that crossed on arrival."""
+    taker, size = float(e.get("takerSize") or 0.0), float(e.get("size") or 0.0)
+    if taker <= 1e-9:
+        return "maker"
+    return "taker" if taker >= size - 1e-9 else "mixed"
 
 
 async def _true_up_market(cid: str) -> None:
@@ -2024,9 +2062,9 @@ async def _true_up_market(cid: str) -> None:
             fee = None if e["feeUsd"] is None else round(e["feeUsd"], 4)
             # `size` guards against a pass that saw more of this order fill meanwhile.
             conn.execute(
-                "UPDATE terminal_fills SET filled_at=?, filled_at_exact=1, "
+                "UPDATE terminal_fills SET filled_at=?, filled_at_exact=1, liquidity=?, "
                 "fees_usd=COALESCE(?, fees_usd) WHERE trade_id=? AND size=?",
-                (e["fillTime"], fee, f["trade_id"], f["size"]))
+                (e["fillTime"], _liquidity(e), fee, f["trade_id"], f["size"]))
             conn.execute(
                 "UPDATE terminal_orders SET fees_usd=COALESCE(?, fees_usd) WHERE order_id=?",
                 (fee, f["order_id"]))
@@ -2186,6 +2224,8 @@ async def reconcile_fills(limit: int = 0) -> dict:
                            THEN fees_usd ELSE excluded.fees_usd END,
                          filled_at_exact = CASE
                            WHEN size = excluded.size THEN filled_at_exact ELSE 0 END,
+                         liquidity = CASE
+                           WHEN size = excluded.size THEN liquidity ELSE NULL END,
                          size = excluded.size,
                          price_cents = excluded.price_cents,
                          cost_usd = excluded.cost_usd""",
@@ -2302,7 +2342,7 @@ def _ledger_basis() -> dict[tuple[str, str], dict]:
         key = (str(r["condition_id"]), str(r["side"]))
         st = out.setdefault(key, {
             "size": 0.0, "cost": 0.0, "fees": 0.0, "fees_known": True,
-            "realized": 0.0, "bought": 0.0, "closed": 0.0,
+            "realized": 0.0, "bought": 0.0, "closed": 0.0, "sold_usd": 0.0,
         })
         sz = float(r["size"] or 0.0)
         px = float(r["price_cents"] or 0.0)
@@ -2323,6 +2363,7 @@ def _ledger_basis() -> dict[tuple[str, str], dict]:
                 # different in each case, and the screen has to be able to
                 # tell them apart.
                 st["closed"] += close
+                st["sold_usd"] += close * px / 100.0
                 st["realized"] += close * (px / 100.0 - avg)
                 st["cost"] -= close * avg
                 st["size"] -= close
@@ -2374,6 +2415,9 @@ _resolution_mem: dict[str, str] = {}
 _MARKET_KV_PREFIX = "terminal:market:"
 _market_meta_mem: dict[str, dict] = {}
 _meta_misses: dict[str, float] = {}
+# The last answer for a market with no result yet. It is re-asked only every few
+# minutes, and between asks the record still has to tell "open" from "unread".
+_meta_unresolved: dict[str, dict] = {}
 # The in-process half of the cache is SCOPED TO THE DATABASE it was read from.
 # A factory reset, a different account or a test's temp DB moves the file under
 # us, and a memory cache that outlived the move would answer questions about
@@ -2395,6 +2439,7 @@ def _resolution_scope_check() -> None:
         _resolution_misses.clear()
         _market_meta_mem.clear()
         _meta_misses.clear()
+        _meta_unresolved.clear()
         _true_up_tried.clear()
 
 
@@ -2568,18 +2613,26 @@ async def _market_meta_for(condition_ids) -> dict[str, dict]:
                 "labels": [str(labels[0]), str(labels[1])] if labels else None,
                 "closeTime": m.get("closeTime") or None,
                 "title": m.get("title") or None,
+                # open | closed | settled: tells "still trading" from "closed, and
+                # the result could not be read".
+                "status": m.get("status") or None,
             }
             if entry["outcome"] in ("yes", "no"):
                 _market_meta_remember(cid, entry)
                 _resolution_remember(cid, str(entry["outcome"]))
+                _meta_unresolved.pop(cid, None)
                 out[cid] = entry
             else:
                 # Still open: worth showing the labels, not worth caching.
                 _meta_misses[cid] = _miss_stamp(m, now)
+                _meta_unresolved[cid] = entry
                 out[cid] = entry
         for cid in chunk:
             if cid not in seen:
                 _meta_misses[cid] = now
+    for cid in ids:
+        if cid not in out and cid in _meta_unresolved:
+            out[cid] = dict(_meta_unresolved[cid])
     return out
 
 
@@ -2594,7 +2647,20 @@ async def _market_meta_for(condition_ids) -> dict[str, dict]:
 _RECORD_MIN_CONTRACTS = 0.5
 
 
-async def _ledger_record(basis: dict[tuple[str, str], dict]) -> dict:
+def _still_open(mk: dict) -> bool:
+    """A market with no result that is still trading: the venue says open, or
+    its close is still ahead. Not the same as a closed market whose result
+    could not be read, which is the only thing "unknown" means."""
+    if mk.get("outcome") in ("yes", "no"):
+        return False
+    if str(mk.get("status") or "").lower() == "open":
+        return True
+    close = us.parse_iso_epoch(mk.get("closeTime"))
+    return bool(close) and close > time.time()
+
+
+async def _ledger_record(basis: dict[tuple[str, str], dict],
+                         open_cids: Optional[set] = None) -> dict:
     """Settle the WHOLE fill ledger, not just what the positions list still shows.
 
     THE BUG THIS EXISTS TO FIX. Realised P&L used to be summed over the positions
@@ -2611,10 +2677,13 @@ async def _ledger_record(basis: dict[tuple[str, str], dict]) -> dict:
 
     An unresolved market settles nothing; it realises from its sells only. A
     market whose outcome we cannot read is counted as UNKNOWN and left out of
-    the total — never folded in as a loss.
+    the total — never folded in as a loss. `open_cids` are markets the caller
+    knows are still trading: held, not settled, and not "unknown" either.
     """
     cids = sorted({cid for cid, _ in basis})
     res = await _resolutions_for(cids)
+    open_cids = set(open_cids or ())
+    still_open: set[str] = set()
 
     settled_pnl = 0.0
     any_settled = False
@@ -2635,7 +2704,7 @@ async def _ledger_record(basis: dict[tuple[str, str], dict]) -> dict:
             continue
         outcome = res.get(cid)
         if outcome is None:
-            unknown.add(cid)
+            (still_open if cid in open_cids else unknown).add(cid)
             continue
         payout = size if outcome == side else 0.0
         settled_pnl += payout - float(v.get("cost") or 0.0)
@@ -2645,7 +2714,9 @@ async def _ledger_record(basis: dict[tuple[str, str], dict]) -> dict:
 
     # Everything the outcome did not decide: sold back before it resolved, or
     # left with a remainder too small to have been worth claiming.
-    closed_out = set(cids) - won - lost - unknown
+    still_open -= won | lost | unknown
+    done = set(cids) - still_open
+    closed_out = done - won - lost - unknown
     return {
         "settledPnlUsd": round(settled_pnl, 2) if any_settled else None,
         "anySettled": any_settled,
@@ -2656,8 +2727,9 @@ async def _ledger_record(basis: dict[tuple[str, str], dict]) -> dict:
         "wonMarkets": len(won),
         "lostMarkets": len(lost),
         "unknownMarkets": len(unknown),
+        "openMarkets": len(still_open),
         "closedOutMarkets": len(closed_out),
-        "ledgerMarkets": len(cids),
+        "ledgerMarkets": len(done),
         # How many markets were held on BOTH sides into settlement, so the
         # won/lost columns can be presented without pretending they add up.
         "bothSidesMarkets": len(won & lost),
@@ -2770,7 +2842,8 @@ async def settled_record() -> dict:
         return {
             "rows": [], "totals": {
                 "won": 0, "lost": 0, "bothSides": 0, "closedOut": 0,
-                "unknown": 0, "markets": 0, "settledMarkets": 0, "rows": 0,
+                "unknown": 0, "markets": 0, "openMarkets": 0,
+                "settledMarkets": 0, "rows": 0,
                 "pnlUsd": None, "pnlMissingRows": 0,
                 "feesUsd": None, "feesKnown": True, "unknownRows": 0,
             },
@@ -2787,6 +2860,7 @@ async def settled_record() -> dict:
     won: set[str] = set()
     lost: set[str] = set()
     unknown: set[str] = set()
+    still_open: set[str] = set()
     fees_total = 0.0
     fees_all_known = True
     pnl_total = 0.0
@@ -2800,6 +2874,12 @@ async def settled_record() -> dict:
         res = mk.get("outcome") if mk.get("outcome") in ("yes", "no") else None
 
         size = float(v.get("size") or 0.0)
+        if size > 0.01 and res is None and _still_open(mk):
+            # An open position is not part of the settled record. It used to be
+            # listed as "unknown" with the market's future close as its
+            # settledAt and a note that the outcome "could not be read".
+            still_open.add(cid)
+            continue
         cost = float(v.get("cost") or 0.0)
         realized = float(v.get("realized") or 0.0)
         fees = float(v.get("fees") or 0.0)
@@ -2864,7 +2944,8 @@ async def settled_record() -> dict:
             "resolvedOutcome": res,
             "resolvedOutcomeLabel": (str(labels[0 if res == "yes" else 1])
                                      if (labels and res) else None),
-            "settledAt": mk.get("closeTime") or None,
+            # The market's close, once there is a result or a sale to date.
+            "settledAt": (mk.get("closeTime") or None) if outcome != "unknown" else None,
             # Still listed on the account. null = we could not read the
             # positions, which is not the same as "no".
             "inWallet": (None if wallet is None else (cid, side) in wallet),
@@ -2875,8 +2956,10 @@ async def settled_record() -> dict:
     both = won & lost
     for r in rows:
         r["bothSides"] = r["conditionId"] in both
-    # Same arithmetic as `_ledger_record`, so the two can never disagree.
-    closed_out = set(cids) - won - lost - unknown
+    # Same arithmetic as `_ledger_record`, so the two can never disagree. A
+    # market with a position still open is in none of the four.
+    done = set(cids) - still_open
+    closed_out = done - won - lost - unknown
 
     # Newest first, by the market's own close time where the venue gave us
     # one and the last fill otherwise — never by a date we invented.
@@ -2885,10 +2968,14 @@ async def settled_record() -> dict:
         r.pop("_sort", None)
 
     parts: list[str] = [
-        f"{len(won)} won and {len(lost)} lost across {len(cids)} market(s) in "
+        f"{len(won)} won and {len(lost)} lost across {len(done)} market(s) in "
         f"your fill ledger. This is the RECORD, not your open positions: a winner "
         f"that has already paid out still counts here, and it left the Positions "
         f"tab when it paid."]
+    if still_open:
+        parts.append(
+            f"{len(still_open)} market(s) you still hold have not closed yet and "
+            f"are not listed here.")
     if both:
         parts.append(
             f"{len(both)} of those are in BOTH columns because both sides were "
@@ -2909,7 +2996,9 @@ async def settled_record() -> dict:
         "totals": {
             "won": len(won), "lost": len(lost), "bothSides": len(both),
             "closedOut": len(closed_out), "unknown": len(unknown),
-            "markets": len(cids),
+            "markets": len(done),
+            # Held, and the market has not closed: not in the record yet.
+            "openMarkets": len(still_open),
             # What the toggle counts: markets that are DONE, deduplicated.
             "settledMarkets": len(won | lost | closed_out),
             "rows": len(rows),
@@ -3013,6 +3102,7 @@ async def portfolio() -> dict:
     any_venue_pnl = False
     tot_val = tot_cost = tot_pnl = 0.0
     any_reconciled = False
+    open_cids: set[str] = set()
 
     for p in raw_positions:
         cid = str(p.get("ticker") or "")
@@ -3040,6 +3130,8 @@ async def portfolio() -> dict:
         # `status`, not just the outcome: a dead heat is settled with neither
         # side winning outright, and pays what the summary's probability says.
         settled = resolved is not None or status == "settled"
+        if status == "open" and not settled and size > 0.01:
+            open_cids.add(cid)
 
         outcome_labels = (m or {}).get("outcomes")
         if not (isinstance(outcome_labels, (list, tuple))
@@ -3243,7 +3335,7 @@ async def portfolio() -> dict:
     # has no sell row, so both of the old terms missed it; what was left was the
     # losers, which is why an account of 105 resolved losers reported "realised
     # −$681.13" while it had actually won 453 markets.
-    record = await _ledger_record(basis)
+    record = await _ledger_record(basis, open_cids)
     ledger_realized = sum(v["realized"] for v in basis.values()) if basis else None
     settled_total = record["settledPnlUsd"]
     if any_venue_extra:
@@ -3252,7 +3344,8 @@ async def portfolio() -> dict:
     any_sells = any(v.get("closed", 0.0) > 0 for v in basis.values())
     if ledger_realized is None:
         realized = None
-    elif record["unknownMarkets"] and not (any_sells or any_settled_pnl):
+    elif ((record["unknownMarkets"] or record["openMarkets"])
+          and not (any_sells or any_settled_pnl)):
         # Everything we hold is a market whose outcome we could not read.
         # $0.00 would be a claim that nothing has happened; it is not that we
         # know the answer is zero, it is that we do not know the answer.
@@ -3371,6 +3464,9 @@ def fills(limit: int = 100) -> dict:
             "ts": str(r["filled_at"]),
             # False: `ts` is when a reconcile pass saw the fill, not when it happened.
             "tsExact": bool(r["filled_at_exact"]),
+            # maker | taker | mixed, from the exchange's own trade rows. None until
+            # they have been read (and for fills recorded before this was kept).
+            "liquidity": r["liquidity"],
             "reconciled": True,
             "origin": str(r["origin"] or "unknown"),
             "source": "ledger",

@@ -1,11 +1,12 @@
 """Live check of the Polymarket US order path, on the owner's own API key.
 
-Answers what the docs and mocks can't, and is what unlocks buying NO:
+Answers what the docs and mocks can't:
 
   * the key is accepted, and balances, positions and open orders read
   * both WebSockets connect with our signature and deliver parseable frames
   * the exchange reads a NO order's price on the YES side (docs: "the price always
-    refers to the YES side"). The app refuses to BUY NO until this has been seen.
+    refers to the YES side"). Seen on 2026-11-04, so the app buys NO without this
+    check. If a run ever sees the opposite, it locks buying NO on this machine.
   * with --with-fill: real small fills, how they read back, and the sign of
     netPosition (undocumented; the app assumes negative means NO)
 
@@ -224,15 +225,15 @@ async def check_no_side(market: dict, book: dict, y: float) -> None:
             ok("probe cancelled")
 
     if verdict == "yes-side":
-        api.set_no_side_verified(True)
-        ok("NO orders are priced on the YES side, as the app sends them. Buying NO is unlocked for this key.")
+        api.set_no_side_mismatch(False)
+        ok("NO orders are priced on the YES side, as the app sends them.")
     elif verdict == "no-side":
-        api.set_no_side_verified(False)
+        api.set_no_side_mismatch(True)
         bad("NO orders are priced on the NO side. us_api.wire_price is wrong for this API: "
-            "fix it before trading. Buying NO stays locked.")
+            "fix it before trading. Buying NO is now locked on this machine.")
     else:
         bad("couldn't tell where the probe landed (a busy level, or the book didn't update). "
-            "Buying NO stays locked. Run it again.")
+            "Nothing was changed. Run it again.")
 
 
 async def net_position(slug: str) -> tuple[float | None, int | None]:
@@ -328,10 +329,10 @@ async def main() -> int:
         await check_no_side(market, book, y)
         if args.with_fill:
             await check_fill("yes")
-            if api._no_side_verified:
+            if not api.no_buy_locked():
                 await check_fill("no")
             else:
-                note("skipping the NO fill: the NO check didn't pass")
+                note("skipping the NO fill: buying NO is locked")
     finally:
         await user_ws.feed.stop()
         await clob_ws.feed.stop()

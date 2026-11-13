@@ -142,26 +142,3 @@ export function GuideVideoLibrary() {
     </div>
   );
 }
-
-/** The big "watch this first" row on the onboarding welcome step. */
-export function GuideVideoCard() {
-  const [open, setOpen] = useState(false);
-  const video = GUIDE_VIDEOS[0];
-  return (
-    <>
-      <button
-        type="button"
-        onClick={() => setOpen(true)}
-        data-testid="guide-video-open"
-        className="group flex w-full items-center gap-4 rounded-2xl border border-sky-400/40 bg-sky-500/10 p-2.5 text-left transition-colors hover:border-sky-400/70 hover:bg-sky-500/15"
-      >
-        <span className="w-[128px] shrink-0"><Poster video={video} /></span>
-        <span>
-          <span className="block text-sm font-semibold text-white">New here? Watch the {videoLength(video.seconds)} video</span>
-          <span className="block text-xs text-krypt-muted">Every click shown, on pretend money. The Guide page has one for everything else.</span>
-        </span>
-      </button>
-      {open && <GuideVideoModal video={video} onClose={() => setOpen(false)} />}
-    </>
-  );
-}

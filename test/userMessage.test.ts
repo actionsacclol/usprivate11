@@ -27,7 +27,7 @@ describe('errors that cross from the backend to a person', () => {
     'Order throttle: too many orders this minute.',
     'Price collar: 91c is too far from the last price.',
     'Refused: this order would cross your own resting order.',
-    'Buying NO is locked until the live check has passed.',
+    'Buying NO is locked: the live check saw the exchange price a NO order differently from how this app sends it.',
   ])('a backend safety message reaches the person verbatim: %s', (m) => {
     expect(userMessage(new Error(m))).toBe(m);
     expect(userMessage(new Error(`Error invoking remote method 'terminal:place': Error: ${m}`))).toBe(m);

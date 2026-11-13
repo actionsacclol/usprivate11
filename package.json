@@ -1,7 +1,7 @@
 {
   "name": "krypt-polybot-us",
   "productName": "Krypt PolyBot US",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "A desktop trading app for Polymarket US: crypto up/down engine, manual terminal, AI agents, and your own Python strategy scripts. Part of the Krypt free tools suite.",
   "main": "dist-electron/main.js",
   "author": {

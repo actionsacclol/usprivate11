@@ -124,6 +124,36 @@ def test_a_fill_in_stages_sums_its_executions(monkeypatch, fresh_db):
     assert f["filled_at"] == "2026-11-06T08:28:00Z"
 
 
+@pytest.mark.parametrize("trades, liquidity", [
+    ([_raw_trade("o1", 30)], "maker"),
+    ([_raw_trade("o1", 30, fee="0.0600", taker=True)], "taker"),
+    ([_raw_trade("o1", 10, taker=True), _raw_trade("o1", 20)], "mixed"),
+])
+def test_a_fill_says_whether_it_made_or_took(monkeypatch, fresh_db, trades, liquidity):
+    """The exchange marks every trade with who the aggressor was, and the app
+    threw it away: nobody could tell a resting fill from one that paid the fee."""
+    _placed("o1")
+    _venue(monkeypatch, {"o1": _view("o1")}, trades)
+    _run(tt.reconcile_fills())
+    assert _fill("o1")["liquidity"] == liquidity
+    assert tt.fills()["fills"][0]["liquidity"] == liquidity
+
+
+def test_liquidity_is_unknown_until_the_trades_are_read_and_again_when_more_fills(
+        monkeypatch, fresh_db):
+    _placed("o1")
+    _venue(monkeypatch, {"o1": _view("o1", filled=10.0, status="live")}, [])
+    _run(tt.reconcile_fills())
+    assert tt.fills()["fills"][0]["liquidity"] is None
+    _venue(monkeypatch, {"o1": _view("o1", filled=10.0, status="live")}, [_raw_trade("o1", 10)])
+    _run(tt.reconcile_fills())
+    assert _fill("o1")["liquidity"] == "maker"
+    # Ten more fill: what was read describes the first ten only.
+    _venue(monkeypatch, {"o1": _view("o1", filled=20.0, status="live")}, RuntimeError("activity down"))
+    _run(tt.reconcile_fills())
+    assert _fill("o1")["liquidity"] is None
+
+
 @pytest.mark.parametrize("trades", [
     RuntimeError("activity down"),
     [],

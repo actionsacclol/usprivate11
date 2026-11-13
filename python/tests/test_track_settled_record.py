@@ -232,6 +232,50 @@ def test_an_unreadable_outcome_is_unknown_never_a_loss(fresh_db, monkeypatch):
     assert "could not read" in r["note"]
 
 
+def test_an_open_position_is_not_in_the_settled_record(fresh_db, monkeypatch):
+    """Live 2026-11-07: a position still open was listed as `unknown`, with the
+    market's future close as its settledAt and a note that the outcome "could
+    not be read". It hadn't happened yet."""
+    _fills([
+        {"cid": BTC_UP, "side": "yes", "action": "buy", "size": 5.0, "price": 40.0},
+        {"cid": ETH_UP, "side": "yes", "action": "buy", "size": 6.0, "price": 50.0},
+    ])
+    r = _record(monkeypatch, wallet=[{"cid": ETH_UP, "size": 6.0}],
+                markets={BTC_UP: {"outcome": "yes", "close": "2026-01-02T00:00:00Z"},
+                         ETH_UP: {"outcome": None, "close": "2099-01-01T00:00:00Z"}})
+
+    assert [row["conditionId"] for row in r["rows"]] == [BTC_UP]
+    t = r["totals"]
+    assert (t["won"], t["unknown"], t["closedOut"], t["markets"]) == (1, 0, 0, 1)
+    assert t["openMarkets"] == 1 and t["pnlMissingRows"] == 0
+    assert "could not read" not in r["note"] and "not closed yet" in r["note"]
+
+    # An open market is re-asked only every few minutes. Between asks it is
+    # still open, not unknown.
+    again = _run(tt.settled_record())
+    assert [row["conditionId"] for row in again["rows"]] == [BTC_UP]
+    assert again["totals"]["openMarkets"] == 1
+
+
+def test_a_closed_market_with_no_result_yet_is_unknown_with_no_settle_time(
+        fresh_db, monkeypatch):
+    _fills([{"cid": GIANTS, "side": "yes", "action": "buy", "size": 4.0, "price": 30.0}])
+
+    async def _closed(ids):
+        return [{"conditionId": GIANTS, "title": "T", "status": "closed",
+                 "resolvedOutcome": None, "outcomes": ["Yes", "No"],
+                 "closeTime": "2026-01-01T00:00:00Z"}]
+
+    async def _positions(*_a, **_kw):
+        return []
+    monkeypatch.setattr(tt.api, "get_positions", _positions)
+    monkeypatch.setattr(tt.term, "_summaries_for", _closed)
+    r = _run(tt.settled_record())
+    [row] = r["rows"]
+    assert row["outcome"] == "unknown" and row["settledAt"] is None
+    assert r["totals"]["unknown"] == 1 and r["totals"]["openMarkets"] == 0
+
+
 def test_a_market_held_on_both_sides_is_labelled_not_double_counted(fresh_db, monkeypatch):
     """A paired crypto entry holds YES and NO into settlement, so it is a win
     AND a loss. It is shown once per side, both rows flagged, and the totals

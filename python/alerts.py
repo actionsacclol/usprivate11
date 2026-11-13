@@ -151,6 +151,23 @@ def _trading_alerts(s: dict) -> list[dict]:
         out.append(_alert("account-lock", ERROR, "Another copy of the app holds this account",
                           str(s["accountLock"])[:200],
                           "Close the other copy of the app. This one can't open trades until then."))
+    unknown = s.get("unknownPositions") or []
+    if unknown:
+        shown = ", ".join(
+            f"{float(u.get('qty') or 0):g} {str(u.get('side') or '').upper()} of "
+            f"{str(u.get('ticker') or '')[:48]} (cost ${float(u.get('costUsd') or 0):.2f})"
+            for u in unknown[:3])
+        more = f", and {len(unknown) - 3} more" if len(unknown) > 3 else ""
+        one = len(unknown) == 1
+        out.append(_alert(
+            "unknown-positions", ERROR,
+            "Your account holds a position this app didn't place" if one
+            else "Your account holds positions this app didn't place",
+            f"{shown}{more}. The app can't look {'this market' if one else 'these markets'} "
+            "up, so it isn't counted in your results here.",
+            "Check your activity in the Polymarket US app. If you didn't place "
+            f"{'it' if one else 'them'}, create a new API key and delete the old one.",
+            _nav("api", "Open API Key page")))
     if s.get("balanceStale"):
         out.append(_alert("balance-stale", WARN, "Your balance may be out of date",
                           "The app can't read your positions' value from Polymarket US right now.",

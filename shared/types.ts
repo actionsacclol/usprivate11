@@ -358,6 +358,8 @@ export interface TraderConfig {
   mcpMaxPositions?: number;
   /** Edge an agent's own forecast must clear after Polymarket's fee, ¢/share. */
   mcpMinEdgeCents?: number;
+  /** The same check for a post-only buy, which rests and pays no fee, ¢/share. */
+  mcpMinEdgeRestingCents?: number;
   /** Realised today + open losses at the bid; at the limit agent BUYS stop. */
   mcpDailyLossUsd?: number;
   /** "Ask me first": each live agent order waits for approval. On by default. */

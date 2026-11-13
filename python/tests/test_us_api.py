@@ -250,7 +250,7 @@ def venue(monkeypatch, tmp_path):
     monkeypatch.setattr(api, "get_quote", fake_quote)
     monkeypatch.setattr(api, "get_open_orders", fake_open)
     monkeypatch.setattr(api, "_kill_reason", "")
-    monkeypatch.setattr(api, "_no_side_verified", False)
+    monkeypatch.setattr(api, "_no_side_mismatch", False)
     monkeypatch.setattr(api, "_order_times", type(api._order_times)())
     monkeypatch.setattr(api, "_throttle_lock", asyncio.Lock())
     monkeypatch.setattr(clob_ws, "quote_cents_if_fresh", lambda *_a, **_k: None)
@@ -269,8 +269,28 @@ def test_a_normal_order_is_sent_once(venue):
     assert len(sent) == 1 and sent[0]["price"]["value"] == "0.52"
 
 
-def test_buying_no_stays_locked_until_the_live_check(venue):
+def test_buying_no_works_on_an_install_that_never_ran_the_live_check(venue):
+    """The lock used to open only after `npm run py:orders` on that machine and
+    key, which an installed build can't run: nobody else could buy NO."""
     sent, _ = venue
+    api.load_venue_state()                      # a fresh profile: no state file
+    assert api.no_buy_locked() is False
+    run(_order(side="no", price_cents=48))
+    assert len(sent) == 1 and sent[0]["intent"] == "ORDER_INTENT_BUY_SHORT"
+    assert sent[0]["price"]["value"] == "0.52", "NO at 48c goes out as YES at 52c"
+
+
+def test_a_profile_from_the_old_per_key_lock_can_buy_no(venue):
+    sent, _ = venue
+    api._write_venue_state(noSideVerifiedKey="")    # the old check, never passed
+    api.load_venue_state()
+    run(_order(side="no", price_cents=48))
+    assert len(sent) == 1
+
+
+def test_a_mismatch_seen_by_the_live_check_locks_no_buys_but_not_exits(venue):
+    sent, _ = venue
+    api.set_no_side_mismatch(True)
     with pytest.raises(api.LocalOrderRefusal) as e:
         run(_order(side="no", price_cents=48))
     assert e.value.status == 412 and not sent
@@ -278,16 +298,15 @@ def test_buying_no_stays_locked_until_the_live_check(venue):
     assert len(sent) == 1, "exits on NO must never be held back by the lock"
 
 
-def test_the_no_lock_survives_a_restart_for_that_key_only(venue, monkeypatch):
-    monkeypatch.setattr(auth, "credentials_present", lambda *_a: True)
-    monkeypatch.setattr(auth, "get_key_id", lambda *_a: "key-a")
-    api.set_no_side_verified(True)
-    monkeypatch.setattr(api, "_no_side_verified", False)
+def test_the_no_lock_survives_a_restart_until_a_check_clears_it(venue, monkeypatch):
+    api.set_no_side_mismatch(True)
+    monkeypatch.setattr(api, "_no_side_mismatch", False)
     api.load_venue_state()
-    assert api._no_side_verified is True
-    monkeypatch.setattr(auth, "get_key_id", lambda *_a: "key-b")
+    assert api.no_buy_locked() is True
+    api.set_no_side_mismatch(False)
+    monkeypatch.setattr(api, "_no_side_mismatch", True)
     api.load_venue_state()
-    assert api._no_side_verified is False
+    assert api.no_buy_locked() is False
 
 
 def test_kill_switch_refuses_everything_and_survives_a_restart(venue):
@@ -403,7 +422,6 @@ def test_order_would_cross_our_own_resting_order(venue):
 
 def test_buying_no_counts_as_selling_for_self_cross(venue):
     sent, resting = venue
-    api._no_side_verified = True
     resting.append({"id": "mine", "intent": "ORDER_INTENT_BUY_LONG", "price": {"value": "0.6"}})
     with pytest.raises(api.LocalOrderRefusal):
         run(_order(side="no", price_cents=45))   # sells YES at 0.55, under our 0.60 bid
@@ -662,6 +680,41 @@ def test_get_quote_reads_the_uncached_market_route(monkeypatch):
     assert seen == [f"{api.GATEWAY}/v1/market/slug/{SLUG}"]
 
 
+_REAL_GET_QUOTE = api.get_quote
+
+
+def _new_window_reads(monkeypatch, book):
+    """A market row with no quotes yet, and this answer from the book route."""
+    async def _gwa(url, params=None, **_k):
+        if url.endswith("/book"):
+            return book, (0.0 if book is not None else None)
+        return {"market": {"slug": SLUG}}, 0.0
+    monkeypatch.setattr(api, "_get_with_age", _gwa)
+
+
+def test_no_row_quote_and_no_book_is_an_unread_price_not_an_empty_book(monkeypatch):
+    _new_window_reads(monkeypatch, None)
+    assert asyncio.run(api._read_bbo(SLUG)) == (None, None, None)
+    # A book that was read and is empty is still a read: nothing rests there.
+    _new_window_reads(monkeypatch, {"marketData": {"bids": [], "offers": []}})
+    bid, ask, age = asyncio.run(api._read_bbo(SLUG))
+    assert (bid, ask) == (None, None) and age == 0.0
+
+
+def test_a_buy_on_a_new_window_nobody_could_price_is_refused(venue, monkeypatch):
+    """A new window's row has no quotes and its book isn't served for the first
+    minutes. That read came back as "empty book, read just now", the collar had
+    no ask to compare, and the buy went out with no reference price."""
+    sent, _ = venue
+    monkeypatch.setattr(api, "get_quote", _REAL_GET_QUOTE)
+    _new_window_reads(monkeypatch, None)
+    with pytest.raises(api.LocalOrderRefusal) as e:
+        run(_order(price_cents=52))
+    assert e.value.status == 503 and not sent
+    run(_order(action="sell", price_cents=52))
+    assert len(sent) == 1, "a failed read must not trap someone in a position"
+
+
 def test_a_fresh_rest_quote_gets_the_tight_collar_and_an_old_one_the_wide(monkeypatch):
     async def _q(age):
         async def _gq(_s, _side):
@@ -859,3 +912,50 @@ def test_signer_ok_is_unknown_with_no_key(monkeypatch):
     monkeypatch.setattr(api.auth, "get_key_id", lambda: "")
     monkeypatch.setattr(api, "_get", _noop)
     assert run(api.check_trading_ready())["signerOk"] is None
+
+
+# ───────── post-only ─────────
+
+
+def test_a_post_only_order_is_sent_as_participate_dont_initiate(venue):
+    sent, _ = venue
+    run(_order(price_cents=51, post_only=True))
+    assert sent[0]["participateDontInitiate"] is True
+    assert sent[0]["tif"] == "TIME_IN_FORCE_GOOD_TILL_CANCEL"
+    run(_order(price_cents=51))
+    assert "participateDontInitiate" not in sent[1], "an ordinary order must be able to take"
+
+
+@pytest.mark.parametrize("kw, touch", [
+    (dict(action="buy", price_cents=52), "best ask of 52¢"),      # at the ask
+    (dict(action="buy", price_cents=60), "best ask of 52¢"),      # through it
+    (dict(action="sell", price_cents=50), "best bid of 50¢"),
+])
+def test_a_post_only_order_that_would_take_is_refused_here(venue, kw, touch):
+    """A bid meant to rest must never pay the taker fee because the price moved."""
+    sent, _ = venue
+    with pytest.raises(api.LocalOrderRefusal) as e:
+        run(_order(post_only=True, **kw))
+    assert e.value.status == 422 and touch in str(e.value) and "Nothing was sent" in str(e.value)
+    assert sent == []
+
+
+def test_post_only_is_for_resting_orders_only(venue):
+    sent, _ = venue
+    for ot in ("FAK", "FOK"):
+        with pytest.raises(ValueError):
+            run(_order(order_type=ot, post_only=True))
+    assert sent == []
+
+
+def test_the_exchange_refusing_a_post_only_order_says_what_happened(venue, monkeypatch):
+    """The touch moved between our read and the order arriving."""
+    async def rejected(method, path, *, json_body=None, params=None, idempotent=True):
+        return {"id": "o1", "executions": [{
+            "type": "EXECUTION_TYPE_REJECTED", "text": "order would cross",
+            "order": {"id": "o1", "state": "ORDER_STATE_REJECTED"}}]}
+    monkeypatch.setattr(api, "_authed_request", rejected)
+    with pytest.raises(api.PolymarketAPIError) as e:
+        run(_order(price_cents=51, post_only=True))
+    assert "post-only" in str(e.value) and "order would cross" in str(e.value)
+    assert "Nothing was placed" in str(e.value)

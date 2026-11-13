@@ -151,7 +151,12 @@ class UserFeed:
                 raise
             except Exception as e:  # noqa: BLE001 — degradable by design
                 self.last_error = f"{type(e).__name__}: {e}"
-                logger.debug(f"user_ws: {self.last_error}")
+                if self.connected:
+                    # One line per drop. Retries that never connect stay quiet.
+                    why = f"; {type(e.__cause__).__name__}: {e.__cause__}" if e.__cause__ else ""
+                    logger.warning(f"user_ws: disconnected ({self.last_error}{why}); reconnecting")
+                else:
+                    logger.debug(f"user_ws: {self.last_error}")
             finally:
                 self.connected = False
             if self._stop:

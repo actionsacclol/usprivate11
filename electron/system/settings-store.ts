@@ -165,6 +165,7 @@ export const DEFAULT_CONFIG: TraderConfig = {
   mcpDailySpendUsd: 100,
   mcpMaxPositions: 10,
   mcpMinEdgeCents: 3,
+  mcpMinEdgeRestingCents: 5,
   mcpDailyLossUsd: 50,
   mcpLiveApproval: true,
   mcpAgents: [defaultAgent('paper')],

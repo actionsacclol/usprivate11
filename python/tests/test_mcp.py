@@ -126,6 +126,30 @@ def test_unknown_arguments_are_refused_not_ignored(fresh, monkeypatch):
     assert res["isError"] and "unknown argument" in _text(res)
 
 
+def test_a_refused_argument_says_what_the_tool_takes(fresh, monkeypatch):
+    """Live test 2026-11-07: an agent sent research_data `query` and
+    get_trade_history `mode`, and the refusal named neither tool's real arguments."""
+    _fake_service(monkeypatch)
+    assert "research_data takes: sql, limit, include_crypto_history" in _text(
+        _call("research_data", {"query": "select 1"}))
+    res = _call("get_trade_history", {"mode": "live"})
+    assert res["isError"] and "get_trade_history takes: kind, limit" in _text(res)
+    assert "get_cross_venue takes: " in _text(_call("get_cross_venue", {}))
+
+
+def test_every_tool_a_description_names_exists():
+    """_CONFIG told agents to read `get_config`, which was never a tool."""
+    import re
+    import mcp_tools
+    names = set(mcp_tools._TOOLS)
+    for t in mcp_tools._TOOLS.values():
+        texts = [t.description] + [str(p.get("description") or "") for p in t.props.values()]
+        for cited in re.findall(r"\b(?:get|set|list|manage|preview|place|cancel|record|"
+                                r"search|discover|backtest|validate|save)_[a-z0-9_]+\b",
+                                " ".join(texts)):
+            assert cited in names or cited in t.props, f"{t.name} cites {cited}"
+
+
 # ────────────────────────────────────────────────────────────────────────
 # HTTP: the loopback server must not be reachable from a web page.
 # ────────────────────────────────────────────────────────────────────────
@@ -495,6 +519,98 @@ def test_a_stale_forecast_is_refused(fresh, monkeypatch):
                      "WHERE id=?", (fid,))
     res = _call("place_order", {**_BUY, "forecastId": fid})
     assert res["isError"] and "older than" in _text(res)
+    assert sent == []
+
+
+def _forecast_then_now(monkeypatch, then, now):
+    """A forecast recorded with YES at `then`, previewed with YES at `now`."""
+    import forecast_ledger
+    import mcp_rails
+    fid = forecast_ledger.record(condition_id="0xabc", prob_yes=0.70, agent_id="default",
+                                 rationale="test forecast rationale", market={"mid": then})
+    real = mcp_rails.market
+
+    async def _moved(cid):
+        return {**(await real(cid)), "mid": now}
+    monkeypatch.setattr(mcp_rails, "market", _moved)
+    return fid
+
+
+def test_a_preview_says_how_far_the_price_moved_since_the_forecast(fresh, monkeypatch):
+    """Live 2026-11-07: a forecast up to 30 minutes old was accepted on a
+    15-minute market with nothing said about the price having moved under it."""
+    _live(monkeypatch)
+    _no_venue(monkeypatch)
+    _priced(monkeypatch)
+    fid = _forecast_then_now(monkeypatch, 40.0, 49.0)
+    out = json.loads(_text(_call("preview_order", {**_BUY, "forecastId": fid})))
+    f = out["forecast"]
+    assert (f["id"], f["midThenCents"], f["midNowCents"], f["movedCents"]) == (fid, 40.0, 49.0, 9.0)
+    assert 0 <= f["ageSec"] < 60
+    assert out["blockers"] == [], "it warns; the edge check is what refuses"
+    [w] = [w for w in out["warnings"] if "moved" in w]
+    assert "+9¢" in w and "40¢ then, 49¢ now" in w and "record a new forecast" in w
+
+
+def test_a_price_that_held_still_gets_no_drift_warning(fresh, monkeypatch):
+    _live(monkeypatch)
+    _no_venue(monkeypatch)
+    _priced(monkeypatch)
+    fid = _forecast_then_now(monkeypatch, 48.0, 49.0)
+    out = json.loads(_text(_call("preview_order", {**_BUY, "forecastId": fid})))
+    assert out["forecast"]["movedCents"] == 1.0
+    assert not [w for w in out["warnings"] if "moved" in w]
+    # A price nobody read is not a price that didn't move.
+    out = json.loads(_text(_call("preview_order", {**_BUY, "forecastId": _forecast()})))
+    assert out["forecast"]["midThenCents"] is None and out["forecast"]["movedCents"] is None
+    assert json.loads(_text(_call("preview_order", {
+        **_BUY, "action": "sell"})))["forecast"] is None
+
+
+def test_a_post_only_buy_is_checked_with_no_fee_against_its_own_minimum(fresh, monkeypatch):
+    """A post-only order can only rest, so it never pays the taker fee. Resting
+    bids filled mostly when the price was moving against them, so they get their
+    own minimum edge instead of the fee's accidental margin."""
+    import mcp_rails
+    _live(monkeypatch, mcp_min_edge_cents=3.0, mcp_min_edge_resting_cents=5.0)
+    sent = _no_venue(monkeypatch)
+    _priced(monkeypatch)
+    monkeypatch.setattr(mcp_rails, "fee_cents", lambda m, px: 1.75)
+    # 54 against 50: +2.25 after the taker fee (under 3), +4 with no fee (under 5).
+    fid = _forecast(54.0)
+    assert "+2.25¢" in _text(_call("place_order", {**_BUY, "forecastId": fid}))
+    res = _call("place_order", {**_BUY, "forecastId": fid, "postOnly": True})
+    assert res["isError"] and "+4.00¢" in _text(res)
+    assert "post-only" in _text(res) and "minimum for a post-only buy is 5¢" in _text(res)
+    # 56 against 50: +4.25 taking, +6 resting. Both clear, and the flag reaches the ticket.
+    fid = _forecast(56.0)
+    out = json.loads(_text(_call("preview_order", {**_BUY, "forecastId": fid, "postOnly": True})))
+    assert out["postOnly"] is True and out["edgeCentsAfterFee"] == 6.0 and out["blockers"] == []
+    res = _call("place_order", {**_BUY, "forecastId": fid, "postOnly": True})
+    assert not res["isError"], _text(res)
+    assert sent[-1][0]["postOnly"] is True
+    assert mcp_rails.activity(1)[0]["postOnly"] is True
+    assert sent == sent[-1:], "the refused orders sent nothing"
+
+
+def test_post_only_needs_an_order_that_can_rest(fresh, monkeypatch):
+    _live(monkeypatch)
+    sent = _no_venue(monkeypatch)
+    _priced(monkeypatch)
+    res = _call("place_order", {**_BUY, "forecastId": _forecast(), "orderType": "FAK",
+                                "postOnly": True})
+    assert res["isError"] and "postOnly needs a GTC order" in _text(res)
+    assert sent == []
+
+
+def test_an_unknown_fee_is_not_made_free_by_post_only(fresh, monkeypatch):
+    import mcp_rails
+    _live(monkeypatch)
+    sent = _no_venue(monkeypatch)
+    _priced(monkeypatch)
+    monkeypatch.setattr(mcp_rails, "fee_cents", lambda m, px: None)
+    res = _call("place_order", {**_BUY, "forecastId": _forecast(), "postOnly": True})
+    assert res["isError"] and "fee" in _text(res)
     assert sent == []
 
 
@@ -1174,7 +1290,8 @@ def test_cancel_all_over_mixed_statuses_touches_only_the_agents_own(fresh, monke
         st = {r["order_id"]: r["status"] for r in conn.execute(
             "SELECT order_id, status FROM mcp_orders WHERE order_id IS NOT NULL")}
     assert st["0xresting"] == "cancelled"
-    assert st["0xstuck"] is None and st["0xdone"] is None and st["0xsams"] is None
+    assert st["0xstuck"] is None and st["0xsams"] is None
+    assert st["0xdone"] == "filled", "10 of 10 on the ledger is booked as filled"
 
 
 def test_exits_are_not_capped(fresh, monkeypatch):

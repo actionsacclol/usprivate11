@@ -84,6 +84,7 @@ import crypto15m_trader
 import db
 import polymarket_api
 import polymarket_auth
+import script_quotes
 import script_sandbox
 import trader
 from script_backtest import (
@@ -265,6 +266,7 @@ def _disable(sid: str, reason: str) -> None:
     Dropping it makes a re-enable compile fresh from the row and reload the
     last persisted (good) state."""
     _compiled.pop(sid, None)
+    script_quotes.forget(sid)
     stopped_this_run[sid] = reason
     try:
         with db.get_db() as conn:
@@ -1523,6 +1525,7 @@ def forget(sid: str) -> None:
     _hb.pop(sid, None)
     _hb_last.pop(sid, None)
     _status.pop(sid, None)
+    script_quotes.forget(sid)
     for key in [k for k in _market_cooldown if k[0] == sid]:
         del _market_cooldown[key]
 
@@ -1627,6 +1630,16 @@ def _heartbeat_line(hb: dict[str, int], *, shadow: bool, open_count: int,
         # there is simply no executable book yet, which is not a rail.
         seg += f", {refused:,} declined"
     parts.append(seg)
+    if hb.get("quote") or hb.get("quote_hooked"):
+        # Simulated resting bids: how many were placed, re-priced and pulled, and
+        # how many the market came through.
+        parts.append(
+            f"quote ×{hb.get('quote', 0):,} → {hb.get('quote_places', 0):,} placed, "
+            f"{hb.get('quote_moves', 0):,} moved, {hb.get('quote_cancels', 0):,} pulled, "
+            f"{_n(hb.get('quote_fills', 0), 'fill')}")
+    if hb.get("quote_skipped_armed"):
+        # quote() is simulated only. An armed script's bids are not sent.
+        parts.append("quote skipped (shadow only: put the script back in shadow to run it)")
     if hb.get("supervise_skipped_shadow"):
         # Say it rather than look broken: supervise() is the one hook that
         # reaches the live engine, so shadow skips it entirely.
@@ -1655,6 +1668,8 @@ async def _maybe_heartbeat(s: dict, mod: script_sandbox.CompiledScript, *,
         for hook in ("decide", "decide_market", "decide_signal", "manage"):
             if hook in mod.hooks:
                 hb.setdefault(f"{hook}_hooked", 1)
+        if "quote" in mod.hooks and shadow:
+            hb.setdefault("quote_hooked", 1)
         line = _heartbeat_line(hb, shadow=shadow, open_count=open_count,
                                day_pnl=day_pnl)
         name = str(s.get("name") or sid[:8])
@@ -1762,7 +1777,7 @@ async def run_tick(cfg: dict, *, authed: bool) -> None:
     # market-only or signal-only script has no business driving that traffic,
     # and before scripts were decoupled from the crypto engine this was
     # hidden behind "the crypto engine is polling anyway".
-    wants_crypto = bool(_enabled_hooks & {"decide", "manage"})
+    wants_crypto = bool(_enabled_hooks & {"decide", "manage", "quote"})
     assets: list[dict] = []
     if wants_crypto:
         snap = await crypto15m.snapshot(cfg)
@@ -1901,6 +1916,37 @@ async def run_tick(cfg: dict, *, authed: bool) -> None:
                     open_count += 1
                 else:
                     _hb_note(sid, "refused")
+        if died:
+            await _drain_logs(sid, mod)
+            continue
+
+        # ── quote(): resting bids on both sides, simulated ────────────
+        # Shadow only (see script_quotes). An armed script's quote() is not
+        # run: its bids would have to be real, and nothing sends those yet.
+        if "quote" in mod.hooks and not shadow:
+            _hb_note(sid, "quote_skipped_armed")
+        elif "quote" in mod.hooks:
+            watched: set = set()
+            for a in assets:
+                if not script_allows_asset(scope, str(a.get("asset") or "")):
+                    continue
+                watched.add(str(a.get("ticker")))
+                try:
+                    err = script_quotes.run_asset(
+                        sid, a, cfg, env,
+                        lambda c: _call_hook(mod, "quote", cfg, c),
+                        lambda key: _hb_note(sid, key), portfolio)
+                except script_sandbox.SCRIPT_FAILURES as e:
+                    err = str(e)
+                if err:
+                    _hb_note(sid, "errors")
+                    _disable(sid, f"quote: {err}")
+                    await _emit_event("script:status",
+                                     {"id": sid, "enabled": False,
+                                      "lastError": f"quote: {err}"})
+                    died = True
+                    break
+            script_quotes.drop_ended(sid, watched)
         if died:
             await _drain_logs(sid, mod)
             continue

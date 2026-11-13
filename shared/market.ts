@@ -320,6 +320,11 @@ export interface ManualOrderRequest {
   size: number;
   orderType: OrderType;
   /**
+   * GTC only. The order may rest and may never take: if it would trade right
+   * away it is refused and nothing is sent. A fill is a maker fill, no fee.
+   */
+  postOnly?: boolean;
+  /**
    * The dollar cost the UI showed the user. The MAIN process re-computes it
    * and refuses the order if it drifted — so a hostile renderer cannot spend
    * more than the number a human actually read.
@@ -836,7 +841,10 @@ export interface SettledRecordTotals {
   bothSides: number;
   closedOut: number;
   unknown: number;
+  /** Markets that are done. A market still open is not counted here. */
   markets: number;
+  /** Held on a market that has not closed yet: not in the record. */
+  openMarkets?: number;
   /** Markets that are done — won, lost or closed out, deduplicated. */
   settledMarkets: number;
   rows: number;
@@ -868,6 +876,11 @@ export interface TerminalFill {
   /** What it ACTUALLY filled at, from the venue ledger — not what we asked. */
   priceCents: number | null;
   feeUsd: number | null;
+  /**
+   * The exchange's own word: maker (the order was resting, no fee), taker (it
+   * crossed), mixed. null = not read yet, or a fill from before this was kept.
+   */
+  liquidity?: 'maker' | 'taker' | 'mixed' | null;
   costUsd: number | null;
   ts: string;
   /** Matched against the venue own fills endpoint. */

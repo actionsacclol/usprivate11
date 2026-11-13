@@ -427,6 +427,8 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "script_max_entry_cents": 97,       # hard cap on any script submit price
     "script_max_contracts": 20,         # per-order size cap
     "script_max_open": 2,               # open positions per script
+    # quote(): contracts a script's resting bids may hold on ONE side of one window.
+    "script_quote_max_inventory": 20,
     "script_daily_loss_usd": 25.0,      # per-script realized daily loss → auto-disable (0 = off)
     "script_max_enabled": 10,           # concurrently enabled scripts (loop-starvation guard)
     # decide_market(): the general-market universe scanned per tick. Each
@@ -538,6 +540,11 @@ DEFAULT_CONFIG: dict[str, Any] = {
     # forecast must clear after Polymarket's fee.
     "mcp_max_positions": 10,
     "mcp_min_edge_cents": 3.0,
+    # The same check for a POST-ONLY buy, which can only rest and so pays no fee.
+    # Its own number because a resting bid fills mostly when the price is moving
+    # against it (live 2026-11-07/08: three of three filled bids lost). At 5 a
+    # post-only bid needs about as much edge as taking does at even odds.
+    "mcp_min_edge_resting_cents": 5.0,
     # Daily loss stop: closes, settlements and fees realised today, all agents.
     # At the limit, agent BUYS stop for the UTC day; exits never do.
     "mcp_daily_loss_usd": 50.0,
@@ -954,6 +961,8 @@ def _validate_config(cfg: dict[str, Any]) -> dict[str, Any]:
     cfg["script_max_contracts"] = _clampi(
         cfg.get("script_max_contracts"), 1, 10_000, d["script_max_contracts"])
     cfg["script_max_open"] = _clampi(cfg.get("script_max_open"), 1, 100, d["script_max_open"])
+    cfg["script_quote_max_inventory"] = _clampi(
+        cfg.get("script_quote_max_inventory"), 1, 10_000, d["script_quote_max_inventory"])
     cfg["script_daily_loss_usd"] = _clampf(
         cfg.get("script_daily_loss_usd"), 0.0, 1e6, d["script_daily_loss_usd"])
     cfg["script_max_enabled"] = _clampi(
@@ -978,6 +987,8 @@ def _validate_config(cfg: dict[str, Any]) -> dict[str, Any]:
         cfg.get("mcp_max_positions"), 0, 500, d["mcp_max_positions"])
     cfg["mcp_min_edge_cents"] = _clampf(
         cfg.get("mcp_min_edge_cents"), 0.0, 50.0, d["mcp_min_edge_cents"])
+    cfg["mcp_min_edge_resting_cents"] = _clampf(
+        cfg.get("mcp_min_edge_resting_cents"), 0.0, 50.0, d["mcp_min_edge_resting_cents"])
     cfg["mcp_daily_loss_usd"] = _clampf(
         cfg.get("mcp_daily_loss_usd"), 0.0, 1_000_000.0, d["mcp_daily_loss_usd"])
     # Only an explicit False turns approvals off: an unreadable value must not

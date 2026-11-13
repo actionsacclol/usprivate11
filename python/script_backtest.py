@@ -758,7 +758,7 @@ def run(cfg: dict, code: str, *, assets: Optional[list] = None,
         not_backtestable = (
             f"NOT BACKTESTABLE: this script defines {', '.join(hooks)} but no "
             "decide(ctx). The recorded corpus is crypto Up/Down windows only, "
-            "so decide_market() / decide_signal() / supervise() have nothing to "
+            "so decide_market() / decide_signal() / supervise() / quote() have nothing to "
             "replay against — that is why there are 0 trades, NOT a lack of "
             "recorded data. Validate this script in SHADOW mode instead."
         )

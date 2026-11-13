@@ -1389,6 +1389,39 @@ _last_filter_log: dict[tuple[int, str], float] = {}
 # line otherwise repeats every 30s reconcile cycle.
 _last_skip_import_log: dict[tuple[str, str], float] = {}
 
+# Holdings in the account on a market this app can't look up, by (market, side).
+# Not imported (see the import guard in reconcile_positions_with_polymarket);
+# shown to the user as an alert instead, because a position nobody here placed
+# is either something bought in Polymarket's own app or a sign the API key is
+# in someone else's hands.
+_UNKNOWN_POSITION_PASSES = 2        # one miss can be a failed read
+_UNKNOWN_POSITION_TTL_SEC = 180.0   # reconcile runs every 30s; gone after a few misses
+_unknown_positions: dict[tuple[str, str], dict] = {}
+
+
+def _note_unknown_position(ticker: str, side: str, qty: float, cost_usd: float) -> None:
+    now = time.time()
+    e = _unknown_positions.setdefault(
+        (ticker, side), {"ticker": ticker, "side": side, "firstSeen": now, "passes": 0})
+    e.update(qty=float(qty), costUsd=round(float(cost_usd), 2), lastSeen=now)
+    e["passes"] += 1
+    if e["passes"] == _UNKNOWN_POSITION_PASSES:
+        logger.warning(
+            f"[reconcile] the account holds {qty:g} {side.upper()} of {ticker} "
+            f"(cost ${cost_usd:.2f}), a market this app can't look up. Not imported.")
+    cap_dict_size(_unknown_positions)
+
+
+def unknown_positions() -> list[dict]:
+    """Holdings the last few reconciles could not tie to a market, oldest first."""
+    now = time.time()
+    for k in [k for k, e in _unknown_positions.items()
+              if now - float(e.get("lastSeen") or 0.0) > _UNKNOWN_POSITION_TTL_SEC]:
+        del _unknown_positions[k]
+    return sorted((dict(e) for e in _unknown_positions.values()
+                   if int(e.get("passes") or 0) >= _UNKNOWN_POSITION_PASSES),
+                  key=lambda e: e["firstSeen"])
+
 
 # ───────── reconciliation / poll ────────────────────────────────────
 
@@ -2012,6 +2045,55 @@ def _position_fee_usd(pos: dict) -> float:
         backtest.venue_fee_per_contract(price, _fee_coeff_for(pos)) * filled, 6)
 
 
+# ───────── positions the Terminal's fill ledger already knows ──────────────
+# An order placed from the Terminal or by an AI agent is recorded in
+# terminal_orders/terminal_fills, never here. The wallet reconcile then finds
+# the holding and imports it as an `external` row. That row knows the wallet's
+# share count and cost and nothing else: not what was sold since, and not what
+# each fill paid in fees. Booking it from those two numbers alone (live test,
+# 2026-11-07 to 11-09, 67 agent positions) paid out 39 positions that had been
+# sold as if they were still held (+$34.02 that never existed) and charged a
+# taker fee on every one ($9.41 booked against $1.66 charged: 113 of 129 fills
+# were resting orders, which pay nothing). The ledger has the truth for these
+# rows, so they are booked from it.
+_LEDGER_FLAT = 0.5      # under half a contract left is a closed position
+
+
+def _ledger_positions() -> dict:
+    """terminal_trade._ledger_basis(), or {} when it can't be read: a row then
+    falls back to the wallet-only booking it always had."""
+    try:
+        import terminal_trade  # local: terminal_trade imports this module's peers
+        return terminal_trade._ledger_basis()
+    except Exception as e:  # noqa: BLE001
+        logger.debug(f"[ledger] fill ledger unreadable: {e}")
+        return {}
+
+
+def _ledger_for(pos: dict, ledger: dict, shared: Optional[dict] = None) -> Optional[dict]:
+    """The ledger's figures for an imported row, or None when the row isn't the
+    ledger's to book: an engine's own order, a market the ledger never bought,
+    or one where several local rows share the market and side (the ledger keeps
+    one running total per market and side)."""
+    if pos.get("signal_source") != "external" or pos.get("order_id"):
+        return None
+    key = (pos.get("ticker"), pos.get("direction"))
+    if shared is not None and shared.get(key, 0) != 1:
+        return None
+    led = ledger.get(key)
+    if not led or float(led.get("bought") or 0.0) <= 0:
+        return None
+    return led
+
+
+def _ledger_fee_usd(pos: dict, led: dict) -> float:
+    """What the venue charged across the position's fills. Estimated only while
+    a fill's fee has not been read yet."""
+    if led.get("fees_known"):
+        return round(float(led.get("fees") or 0.0), 6)
+    return _position_fee_usd(pos)
+
+
 def _sell_fee_usd(pos: dict, sold: int, price_cents: float | None) -> float:
     """Taker fee for a crossing SELL of `sold` contracts at `price_cents`
     (category-rated fee-v2, the full venue fee like _position_fee_usd).
@@ -2133,6 +2215,12 @@ async def mark_resolved_positions(cfg: dict) -> list[dict]:
         except Exception:
             pass
 
+    ledger = _ledger_positions()
+    shared: dict = {}
+    for p in by_env:
+        k = (p["ticker"], p["direction"])
+        shared[k] = shared.get(k, 0) + 1
+
     for pos in needs_market:
         market = market_cache.get(pos["ticker"])
         yes_payout = _market_yes_payout(market)
@@ -2146,10 +2234,16 @@ async def mark_resolved_positions(cfg: dict) -> list[dict]:
             continue
 
         direction = pos["direction"]
+        our_payout = yes_payout if direction == "yes" else (1.0 - yes_payout)
+        led = _ledger_for(pos, ledger, shared)
+        if led is not None:
+            row = _book_settlement_from_ledger(pos, led, our_payout)
+            if row:
+                updated.append(row)
+            continue
         filled = int(pos["filled_contracts"] or 0)
         cost_usd = float(pos["cost_usd"] or 0.0)
         fee_usd = _position_fee_usd(pos)
-        our_payout = yes_payout if direction == "yes" else (1.0 - yes_payout)
         settlement_usd = filled * our_payout
         pnl_usd = settlement_usd - cost_usd - fee_usd
 
@@ -2211,6 +2305,53 @@ async def mark_resolved_positions(cfg: dict) -> list[dict]:
             )
 
     return updated
+
+
+def _book_settlement_from_ledger(pos: dict, led: dict, our_payout: float) -> Optional[dict]:
+    """Settle an imported row from the fill ledger: what was still held pays
+    out, what was sold earlier keeps its sale price, and the fee is the venue's.
+    → the updated row."""
+    held = max(0.0, float(led.get("size") or 0.0))
+    cost_left = max(0.0, float(led.get("cost") or 0.0))
+    sold_usd = float(led.get("sold_usd") or 0.0)
+    realized = float(led.get("realized") or 0.0)
+    fee_usd = _ledger_fee_usd(pos, led)
+    payout_usd = held * our_payout
+    pnl_usd = round(realized + payout_usd - cost_left - fee_usd, 6)
+    # Everything the position ever cost and everything it ever returned, so the
+    # row still reads pnl = settlement - cost - fees.
+    cost_usd = round(cost_left + (sold_usd - realized), 6)
+    settlement_usd = round(payout_usd + sold_usd, 6)
+    if held >= _LEDGER_FLAT and our_payout >= 0.99:
+        correct: Optional[int] = 1
+    elif held >= _LEDGER_FLAT and our_payout <= 0.01:
+        correct = 0
+    else:
+        # Sold before the result (or a split result): the money decides.
+        correct = 1 if pnl_usd > 0.05 else (0 if pnl_usd < -0.05 else None)
+    sold_out = held < _LEDGER_FLAT
+    with db.get_db() as conn:
+        db.update_bot_position(
+            conn, pos["id"], resolved=1, outcome_correct=correct,
+            settlement_usd=settlement_usd, pnl_usd=pnl_usd, cost_usd=cost_usd,
+            fees_usd=fee_usd,
+            # A fee the venue reported as nothing is a maker fill. Without the
+            # stamp, a $0 fee reads as "not reported" and is estimated again.
+            entry_maker=1 if (led.get("fees_known") and fee_usd <= 0) else pos.get("entry_maker"))
+        conn.execute(
+            "UPDATE bot_positions SET resolved_at=datetime('now'), closed_early=? WHERE id=?",
+            (1 if sold_out else int(pos.get("closed_early") or 0), pos["id"]))
+        label = "WIN" if correct == 1 else ("LOSS" if correct == 0 else "CLOSED")
+        what = (f"sold for ${sold_usd:.2f}" if sold_out
+                else f"{held:g}c @ {our_payout:.2f}"
+                + (f", ${sold_usd:.2f} sold earlier" if sold_usd > 0 else ""))
+        db.log_event(conn, pos["id"], "resolve",
+                     note=f"{label} pnl=${pnl_usd:+.2f} ({what}; from the fill ledger)")
+        row = db.fetch_position_by_id(conn, pos["id"])
+    logger.info(
+        f"[resolve] {pos['ticker']} {pos['direction']}: {label} pnl=${pnl_usd:+.2f} "
+        f"({what}, cost=${cost_usd:.2f}, fees=${fee_usd:.2f}; from the fill ledger)")
+    return row
 
 
 # ───────── manual reconciliation helpers ────────────────────────────
@@ -2698,6 +2839,15 @@ async def reconcile_positions_with_polymarket() -> tuple[dict, list[dict]]:
             if not settled:
                 try:
                     _mkt = await fetch_market(ticker)
+                    if _mkt is None:
+                        # fetch_market answers None, it doesn't raise: for a
+                        # failed read, and for a market this app can't look up
+                        # at all. Neither is a position to adopt. Importing
+                        # one (live 2026-11-07: six `crossd-*` holdings nobody
+                        # here placed) put it in the win/loss record with an
+                        # invented taker fee and told the user nothing.
+                        _note_unknown_position(ticker, side, qty, cost_cents / 100.0)
+                        continue
                     settled = _market_yes_payout(_mkt) is not None
                 except Exception:
                     # FAIL CLOSED: can't verify the market is live → don't
@@ -2895,6 +3045,13 @@ def _exit_proceeds(pos: dict, activity: list[dict]) -> Optional[dict]:
             # No size/price on the row: take the cash as gross (no fee known).
             sell_gross += gross if gross > 0 else usdc
         elif etype == "REDEEM":
+            # Polymarket US reports a settlement with the position it closed and
+            # no cash figure (us_api.activity_row). That is not a $0 payout: read
+            # as one, a winner was booked as a total loss whenever this sweep ran
+            # before the resolver (live 2026-11-07: a +$7.89 win booked -$3.98).
+            # Without a figure the market's own result settles the row.
+            if ev.get("usdcSize") is None:
+                continue
             redeem_usdc += usdc
             if idx == want_index:
                 redeemed_ours = True
@@ -2974,13 +3131,32 @@ async def detect_external_exits(cfg: dict) -> list[dict]:
     if not candidates:
         return []
 
+    # Positions this app traded: the fill ledger says whether they were sold.
+    # (The venue's trade rows carry no buy/sell side, so the activity scan
+    # below can never see a sale on this venue.)
+    changed: list[dict] = []
+    ledger = _ledger_positions()
+    rest: list[dict] = []
+    for pos in candidates:
+        led = _ledger_for(pos, ledger)
+        if led is None:
+            rest.append(pos)
+        elif float(led.get("size") or 0.0) < _LEDGER_FLAT:
+            row = _book_settlement_from_ledger(pos, led, 0.0)
+            if row:
+                changed.append(row)
+        # else: the ledger still holds it and the wallet doesn't, so the market
+        # settled. The resolver books it from the market's result.
+    candidates = rest
+    if not candidates:
+        return changed
+
     try:
         activity = await get_activity(limit=1000)
     except Exception as e:
         logger.debug(f"[exits] activity fetch failed: {e}")
-        return []
+        return changed
 
-    changed: list[dict] = []
     for pos in candidates:
         info = _exit_proceeds(pos, activity)
         if info is None:

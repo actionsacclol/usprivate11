@@ -14,7 +14,7 @@ import { GlassPanel } from '../components/glass/GlassPanel';
 import { GlassButton } from '../components/glass/GlassButton';
 import { GLASS_TINTS } from '../components/glass/glassPresets';
 import { ONBOARDING_HISTORY, startHistoryDownload } from '../utils/historyDownload';
-import { GuideVideoCard } from '../components/GuideVideo';
+import { YouTubeGuide } from '../components/YouTubeGuide';
 
 // Steps, in order. The disclaimer comes straight after the welcome: the
 // agent step's buttons switch the local agent server on, and that must never
@@ -232,7 +232,10 @@ export function OnboardingModal({ onDone, replay = false, updated = false, onClo
         <div className="min-h-0 flex-1 overflow-y-auto px-8 py-6">
           {at === 'welcome' && (
             <div className="space-y-4 text-sm text-white/90">
-              <GuideVideoCard />
+              {/* The owner's walk-through, first thing on the first screen. It opens
+                  in the browser (YouTubeGuide.tsx has why not in place). The short
+                  bundled videos are on the Guide page. */}
+              <YouTubeGuide />
               <p>
                 Connect the AI agent you already use —{' '}
                 <span className="text-white">Claude Desktop, Claude Code, Cursor, Codex, Windsurf or

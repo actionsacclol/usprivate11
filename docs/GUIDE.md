@@ -55,6 +55,7 @@ A script defines one or more hooks. Every hook is optional except that you need 
 | `manage(position, ctx)` | every tick, per open position | `"sell"` to flatten now, or retune take-profit / stop-loss (trailing stops) |
 | `decide_signal(signal)` | on each new whale / momentum signal | filter and size which signals to follow |
 | `supervise(app)` | once per tick | flip **whitelisted** config (e.g. strategy posture, or switch an engine off) |
+| `quote(ctx)` | once per coin per tick, **shadow mode only** | return the bids you want resting on Up and Down; the app simulates them as post-only orders, with no fee on a fill and a per-side inventory limit |
 | `on_start` / `on_fill` / `on_settle` | lifecycle | keep cross-tick memory in the persistent `state` dict |
 
 ```python
@@ -79,7 +80,9 @@ def decide(ctx):
 `ctx` carries ~50 fields per tick — book asks/bids, the underlying's spot and realized volatility, MACD /
 RSI / VWAP / EMA / SMA indicators, model probability and fee-net edge, time left in the window, and your
 own `portfolio` (balance, open positions, today's P&L). Convenience fields save you the fiddly parts:
-`spreadCents` (book width), `modelEdgePts` (signed model-vs-book disagreement), `favoriteAskCents` (the
+`spreadCents` (book width), `modelEdgePts` (signed model-vs-book disagreement; measured on 3,106 recorded
+15-minute windows, the model was not a better forecast than the market price, and buying on its edge
+figure lost about 1.6¢ a share after the fee), `favoriteAskCents` (the
 favorite's real executable ask), and `timeFracLeft` (0..1 through the window — write one script that
 works on the 5m, 15m *and* hourly series). Every derived field is computed by a single shared helper used
 by both the live engine and the backtester, so a field can never quietly mean two different things.

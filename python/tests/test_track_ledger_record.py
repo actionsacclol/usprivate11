@@ -275,6 +275,21 @@ def test_an_unreadable_outcome_is_counted_never_assumed_lost(fresh_db, monkeypat
     assert "could not read" in (r["recordNote"] or "")
 
 
+def test_an_open_position_is_not_an_outcome_we_could_not_read(fresh_db, monkeypatch):
+    """A position held on a market still trading was counted as an unknown
+    outcome, with a note that its result "could not be read"."""
+    _fills([
+        {"cid": BTC_UP, "side": "yes", "action": "buy", "size": 5.0, "price": 40.0},
+        {"cid": GIANTS, "side": "yes", "action": "buy", "size": 5.0, "price": 40.0},
+    ])
+    r = _portfolio(monkeypatch, wallet=[{"cid": GIANTS, "size": 5.0, "price": 0.4}],
+                   resolved={BTC_UP: "yes", GIANTS: None})
+
+    assert r["wonMarkets"] == 1 and r["unknownResolutionMarkets"] == 0
+    assert r["ledgerMarkets"] == 1, "the record counts markets that are done"
+    assert "could not read" not in (r["recordNote"] or "")
+
+
 def test_one_unknown_market_does_not_void_the_rest(fresh_db, monkeypatch):
     """The unknown is carved out, not contagious: the markets we CAN read are
     still settled, and the page is told how many were left out."""

@@ -622,7 +622,8 @@ class PythonBackend {
     if (obj.type === 'log') {
       const entry: LogEntry = {
         ts: obj.ts || new Date().toISOString(),
-        level: obj.level || 'INFO',
+        // Python calls it WARNING; the Logs page filters and colours on WARN.
+        level: obj.level === 'WARNING' ? 'WARN' : obj.level || 'INFO',
         source: obj.source || 'backend',
         msg: obj.msg || '',
       };

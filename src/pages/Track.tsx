@@ -1063,7 +1063,19 @@ function Fills({ fills, onOpen }: { fills: TerminalFill[]; onOpen: (cid: string)
               <td className="py-2 text-right font-mono text-krypt-muted">{f.size.toLocaleString()}</td>
               <td className="py-2 text-right font-mono text-white"><Val v={f.priceCents} fmt={cents} /></td>
               <td className="py-2 text-right font-mono text-krypt-muted"><Val v={f.costUsd} fmt={usdExact} /></td>
-              <td className="py-2 text-right font-mono text-krypt-muted"><Val v={f.feeUsd} fmt={usdExact} /></td>
+              <td className="py-2 text-right font-mono text-krypt-muted">
+                <Val v={f.feeUsd} fmt={usdExact} />
+                {f.liquidity && (
+                  <span className="ml-1.5 font-sans text-[10px] text-krypt-dim"
+                    title={f.liquidity === 'maker'
+                      ? 'Your order was resting on the book when it filled: a maker fill.'
+                      : f.liquidity === 'taker'
+                        ? 'Your order crossed the book: a taker fill.'
+                        : 'Part of this order rested and part crossed.'}>
+                    {f.liquidity}
+                  </span>
+                )}
+              </td>
             </tr>
           ))}
         </tbody>

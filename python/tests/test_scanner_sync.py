@@ -229,3 +229,50 @@ def test_sync_events_writes_the_venues_event_list(monkeypatch, fresh_db):
     with db.get_db() as c:
         row = c.execute("SELECT event_ticker, series_ticker, title FROM events").fetchone()
     assert tuple(row) == ("mls-winner", "mls-2025", "MLS Champion")
+
+
+# ───────── the research recorder is detached the same way ─────────────
+
+
+def test_a_slow_recorder_pass_is_single_flight_and_off_the_loop(monkeypatch):
+    """Live 2026-11-08: during a network drop each recorder pass waited out its
+    reads' timeouts in line, and scripts and terminal stops waited behind it."""
+    started = {"n": 0}
+    release: asyncio.Event
+
+    async def _slow_pass(_cfg):
+        started["n"] += 1
+        await release.wait()
+        return {}
+
+    monkeypatch.setattr(service.crypto15m_record, "record_tick", _slow_pass)
+
+    async def _run():
+        nonlocal release
+        release = asyncio.Event()
+        service._c15_record_task = None
+        assert service._start_c15_record({}) is True
+        await asyncio.sleep(0)
+        assert service._start_c15_record({}) is False, "a second pass stacked up"
+        release.set()
+        await service._c15_record_task
+        assert service._start_c15_record({}) is True
+        await service._c15_record_task
+
+    asyncio.run(_run())
+    assert started["n"] == 2
+
+
+def test_a_failing_recorder_pass_never_reaches_the_loop(monkeypatch):
+    async def _boom(_cfg):
+        raise RuntimeError("no network")
+
+    monkeypatch.setattr(service.crypto15m_record, "record_tick", _boom)
+
+    async def _run():
+        service._c15_record_task = None
+        assert service._start_c15_record({}) is True
+        await service._c15_record_task
+        assert service._c15_record_task.exception() is None
+
+    asyncio.run(_run())

@@ -194,3 +194,27 @@ def test_a_fallback_quote_tells_the_agent_its_age(fresh, monkeypatch):
     out = json.loads(_text(res))
     assert out["market"]["source"] == "gateway"
     assert out["market"]["ageSec"] is not None
+
+
+def test_a_feed_quote_says_how_old_it_is(monkeypatch):
+    """The feed's quote is served for up to 12 seconds after it last heard about
+    the book, and every one of them was stamped ageSec 0."""
+    import time
+
+    import clob_ws
+    feed = type(clob_ws.feed)()
+    feed._books["m#yes"] = {"bid": 0.40, "ask": 0.42, "ts": time.monotonic() - 7.0}
+    monkeypatch.setattr(clob_ws, "feed", feed)
+    assert 7.0 <= feed.quote_age_sec("m#yes") < 8.0
+    assert feed.quote_age_sec("never-seen") is None
+
+    row = terminal._overlay_live(_listed_row("m"))
+    for field in ("bid", "ask", "mid", "probability"):
+        src = row["sources"][field]
+        assert 7.0 <= src["ageSec"] < 8.0, (field, src)
+    assert (row["bid"], row["ask"]) == (40.0, 42.0)
+    assert 6.0 <= terminal._age_sec(row["sources"]["bid"]["observedAt"]) <= 9.0
+
+    [again] = _run(terminal.clob_quotes([_listed_row("m")]))
+    assert again["sources"]["bid"]["source"] == "clob-ws"
+    assert 6.0 <= again["sources"]["bid"]["ageSec"] <= 9.0

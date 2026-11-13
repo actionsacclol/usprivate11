@@ -73,6 +73,11 @@ TRADE_MODES = ("off", "paper", "live")
 # A forecast older than this no longer backs a buy: the market it argued
 # against has moved on.
 FORECAST_TTL_SEC = 1800
+# A forecast is an opinion about a price. When the price has moved this far since
+# it was recorded, the preview says so. It warns and does not refuse: the edge
+# check already prices the order against the forecast, and how far is too far
+# is the user's call.
+FORECAST_DRIFT_WARN_CENTS = 5.0
 # A queued live order the user did not answer in this long is expired and
 # spends nothing.
 APPROVAL_TTL_SEC = 600
@@ -147,6 +152,9 @@ def rails(c: dict) -> dict:
         "dailySpendUsd": float(c.get("mcp_daily_spend_usd") or 0.0),
         "maxOpenPositions": int(c.get("mcp_max_positions") or 0),
         "minEdgeCents": float(c.get("mcp_min_edge_cents") or 0.0),
+        "minEdgeRestingCents": float(
+            c["mcp_min_edge_resting_cents"] if c.get("mcp_min_edge_resting_cents") is not None
+            else 5.0),
         "dailyLossUsd": float(c.get("mcp_daily_loss_usd") or 0.0),
         "forecastTtlMin": FORECAST_TTL_SEC // 60,
     }
@@ -249,8 +257,8 @@ def record(*, mode: str, client: str, agent_id: str, req: dict, ok: bool,
                (created_at, network, mode, client, agent_id, condition_id, title,
                 side, action, order_type, size, price_cents, forecast_id,
                 committed_usd, ok, order_id, paper_local_id, filled,
-                avg_fill_cents, message, status)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                avg_fill_cents, message, status, post_only)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
             (now_sql(), _net(), mode, (client or "")[:80], agent_id or DEFAULT_AGENT,
              req.get("conditionId") or "", (title or "")[:300],
              req.get("side") or "", req.get("action") or "",
@@ -258,7 +266,7 @@ def record(*, mode: str, client: str, agent_id: str, req: dict, ok: bool,
              float(req.get("priceCents") or 0.0), forecast_id,
              round(committed, 4) if committed is not None else None,
              1 if ok else 0, order_id, paper_local_id, filled, avg,
-             (message or "")[:500], status),
+             (message or "")[:500], status, 1 if req.get("postOnly") else 0),
         )
         return int(cur.lastrowid)
 
@@ -321,6 +329,7 @@ def activity(limit: int = 100, agent_id: Optional[str] = None) -> list[dict]:
         "agentName": names.get(r["agent_id"]),
         "conditionId": r["condition_id"], "title": r["title"] or None,
         "side": r["side"], "action": r["action"], "orderType": r["order_type"],
+        "postOnly": bool(r["post_only"]),
         "size": float(r["size"]), "priceCents": float(r["price_cents"]),
         "forecastId": r["forecast_id"], "committedUsd": r["committed_usd"],
         "ok": bool(r["ok"]), "orderId": r["order_id"], "filled": r["filled"],
@@ -548,7 +557,7 @@ async def refresh_fills(max_age: float = 0.0) -> bool:
 
 
 def _book_final(conn: Any, r: Any, filled: float, status: str,
-                message: Optional[str] = None) -> None:
+                message: Optional[str] = None, avg: Optional[float] = None) -> None:
     """Close one live row at what it FILLED: nothing of it can fill any more.
     A buy's committed spend drops to the filled share of it (an upper bound —
     the limit and the fee at the limit), so a cancelled or killed buy stops
@@ -565,8 +574,10 @@ def _book_final(conn: Any, r: Any, filled: float, status: str,
         committed = round(float(committed) * min(1.0, filled / size), 4)
     conn.execute(
         "UPDATE mcp_orders SET ok=1, status=?, filled=?, committed_usd=?, "
+        "avg_fill_cents=COALESCE(?, avg_fill_cents), "
         "message=COALESCE(?, message) WHERE id=?",
         (status, round(filled, 6), committed,
+         round(float(avg), 4) if avg is not None else None,
          (message or None) and str(message)[:500], int(r["id"])))
 
 
@@ -580,8 +591,9 @@ def promote_from_ledger() -> int:
     """'unknown' live rows whose order id now has fills on the venue's own
     ledger: the order WAS placed. A fill-and-kill is closed at what filled; a
     GTC becomes a sent order (it may still rest — it keeps counting in full
-    until it fills or is cancelled). Called after every successful fill
-    reconcile; → rows promoted."""
+    until it fills or is cancelled). Then every sent order is trued up to the
+    ledger (_book_ledger_fills). Called after every successful fill
+    reconcile; → unknown rows promoted."""
     import db
     n = 0
     with db.get_db() as conn:
@@ -603,8 +615,42 @@ def promote_from_ledger() -> int:
                              "message=? WHERE id=?",
                              (round(got, 6), note[:500], int(r["id"])))
             n += 1
+        _book_ledger_fills(conn)
     if n:
         logger.info("mcp: %d unknown agent order(s) found on the ledger", n)
+    return n
+
+
+def _book_ledger_fills(conn: Any) -> int:
+    """Sent orders the venue's ledger shows more of than the row does: a bid
+    that rested and filled later, or one that matched as it was placed (a GTC
+    reply books no status). Fully filled → 'filled', which nothing else did:
+    the venue sync skips a row whose ledger already covers its size, so the
+    row said "resting, nothing filled" for good and a filled sell took nothing
+    off the agent's exposure in that market. → rows changed."""
+    rows = conn.execute(
+        "SELECT o.*, l.got AS ledger, l.avg AS ledger_avg FROM mcp_orders o "
+        "JOIN (SELECT order_id, SUM(size) AS got, "
+        "             SUM(size * price_cents) / SUM(size) AS avg "
+        "      FROM terminal_fills WHERE size > 0 GROUP BY order_id) l "
+        "  ON l.order_id = o.order_id "
+        "WHERE o.ok=1 AND o.mode='live' AND o.network=? AND o.order_id IS NOT NULL "
+        "AND (o.status IS NULL OR o.status='approved')", (_net(),)).fetchall()
+    n = 0
+    for r in rows:
+        got, size = float(r["ledger"] or 0.0), float(r["size"] or 0.0)
+        avg = r["ledger_avg"]
+        if size > 0 and got >= size - 1e-9:
+            at = f" at {round(float(avg), 2):g}¢" if avg is not None else ""
+            _book_final(conn, r, got, "filled",
+                        f"Filled {got:g} {str(r['side'] or '').upper()}{at}.", avg)
+        elif got > float(r["filled"] or 0.0) + 1e-9:
+            conn.execute("UPDATE mcp_orders SET filled=?, avg_fill_cents=? WHERE id=?",
+                         (round(got, 6),
+                          round(float(avg), 4) if avg is not None else None, int(r["id"])))
+        else:
+            continue
+        n += 1
     return n
 
 
@@ -1084,8 +1130,26 @@ class Vetted:
     market: Optional[dict] = None
     preview: Optional[dict] = None
     forecast_id: Optional[int] = None
+    # {id, ageSec, midThenCents, midNowCents, movedCents}: how old the cited
+    # forecast is and where the YES mid was then and is now.
+    forecast: Optional[dict] = None
     edge: Optional[float] = None
     cost: Optional[float] = None
+
+
+def _ago(sec: float) -> str:
+    return f"{int(sec)} seconds" if sec < 90 else f"{round(sec / 60)} minutes"
+
+
+def _forecast_drift(f: dict, age: float, market: dict) -> dict:
+    """A 30-minute-old forecast on a 15-minute market was accepted with nothing
+    said about the price having moved under it (live 2026-11-07)."""
+    then, now = _num(f.get("market_mid_cents")), _num((market or {}).get("mid"))
+    return {
+        "id": int(f["id"]), "ageSec": round(float(age)),
+        "midThenCents": then, "midNowCents": now,
+        "movedCents": None if then is None or now is None else round(now - then, 2),
+    }
 
 
 def order_req(args: dict) -> dict:
@@ -1101,9 +1165,12 @@ def order_req(args: dict) -> dict:
     cid = str(args.get("conditionId") or "").strip()
     if not cid:
         raise Refused("conditionId is required (find one with search_markets).")
+    post_only = bool(args.get("postOnly"))
+    if post_only and ot != "GTC":
+        raise Refused(f"postOnly needs a GTC order: {ot} trades right away or not at all.")
     return {"conditionId": cid, "side": side, "action": action,
             "size": _num(args.get("size")), "priceCents": _num(args.get("priceCents")),
-            "orderType": ot}
+            "orderType": ot, "postOnly": post_only}
 
 
 async def vet(args: dict, c: dict, mode: str, agent: dict, *,
@@ -1185,6 +1252,11 @@ async def vet(args: dict, c: dict, mode: str, agent: dict, *,
     px = float(pv.get("priceCents") or req["priceCents"])
     req["size"], req["priceCents"] = size, px
     fee_c = fee_cents(v.market, px)
+    # A post-only order can only rest, and a maker fill pays no fee. An unknown
+    # fee stays unknown: it is not known to be a market that charges makers nothing.
+    post_only = bool(req.get("postOnly"))
+    if post_only and fee_c is not None:
+        fee_c = 0.0
 
     if req["action"] == "buy":
         fee_usd = (fee_c or 0.0) * size / 100.0
@@ -1214,13 +1286,27 @@ async def vet(args: dict, c: dict, mode: str, agent: dict, *,
                                   f"{FORECAST_TTL_SEC // 60} minutes. Re-read the "
                                   f"market and record a new one.")
             else:
+                v.forecast = _forecast_drift(f, age, v.market)
+                moved = v.forecast["movedCents"]
+                if moved is not None and abs(moved) >= FORECAST_DRIFT_WARN_CENTS:
+                    v.warnings.append(
+                        f"YES has moved {moved:+g}¢ since you recorded forecast "
+                        f"{v.forecast_id} {_ago(age)} ago ({v.forecast['midThenCents']:g}¢ "
+                        f"then, {v.forecast['midNowCents']:g}¢ now). If what moved it "
+                        f"changes your view, record a new forecast first.")
                 v.edge = edge_cents(float(f["prob_yes"]) * 100.0, req["side"], px, fee_c)
                 if v.edge is None:
                     v.blockers.append(
                         "Polymarket publishes no fee rate this app can read for "
                         "this market, so the edge after fee cannot be checked. "
                         "No trade.")
-                elif v.edge < r["minEdgeCents"]:
+                elif post_only and v.edge < r["minEdgeRestingCents"]:
+                    v.blockers.append(
+                        f"Your forecast ({float(f['prob_yes']) * 100:g}¢ YES) gives "
+                        f"{v.edge:+.2f}¢ per share on {req['side'].upper()} at {px:g}¢ "
+                        f"as a post-only order, which pays no fee; the minimum for "
+                        f"a post-only buy is {r['minEdgeRestingCents']:g}¢. No trade.")
+                elif not post_only and v.edge < r["minEdgeCents"]:
                     whose = (f" ({name}'s rules)" if r["minEdgeCents"] > grails["minEdgeCents"]
                              else "")
                     v.blockers.append(
@@ -1659,7 +1745,7 @@ async def _decide_locked(row_id: int, approve: bool, via: str) -> tuple[dict, Op
     args = {"conditionId": r["condition_id"], "side": r["side"],
             "action": r["action"], "size": r["size"],
             "priceCents": r["price_cents"], "orderType": r["order_type"],
-            "forecastId": r["forecast_id"]}
+            "postOnly": bool(r["post_only"]), "forecastId": r["forecast_id"]}
     try:
         c = cfg()
         # Re-vetted as the agent that asked, under its rules as they are NOW.

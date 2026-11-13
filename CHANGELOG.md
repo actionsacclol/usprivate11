@@ -2,7 +2,89 @@
 
 All notable changes to this project are documented here.
 
-## [Unreleased]
+## [0.4.0] — 2026-11-13
+
+### The guide video
+The first onboarding screen now leads with the full guide video. Pressing it opens the video on
+YouTube in your browser. If you already use the app, onboarding opens once after this update so you
+see it; closing it changes nothing. The short videos are still on the Guide page.
+
+### Buying NO
+Buying NO, and Down on the crypto markets, was refused on every install except the developer's own
+machine. The app waited for a check of how the exchange prices NO orders, and that check could only
+be run from the source code. The check passed on the real exchange on 2026-11-04, so NO buys are now
+open everywhere. Selling NO was never affected.
+
+### Wins, P&L and fees on the dashboard
+Positions an AI agent or the Terminal traded are now booked from the app's own record of each fill.
+Before, a position you sold was paid out as if you had held it to settlement, a winner could be
+booked as a total loss, and every trade was charged an estimated taker fee even when the exchange
+charged nothing. In a two-day live test the dashboard showed 39 sold markets as settlement results
+and $9.41 of fees against $1.66 real. Trades already booked keep their old figures. The agents' own
+loss stop and spend caps read the fill record already and were not affected.
+
+A run's P&L in Run History no longer counts a withdrawal as a loss or a deposit as a gain.
+
+### Positions the app can't identify
+A holding on a market the app can't look up is no longer counted as a trade with an invented fee.
+It raises an alert that names the holding and says what to do.
+
+### Post-only orders and maker fills
+A resting (GTC) order can now be sent post-only, from the order ticket and by AI agents
+(`postOnly`). A post-only order may rest on the book and may never take: if its price would trade
+right away it is refused and nothing is sent, so a bid meant to rest can't end up paying the taker
+fee. For an agent, a post-only buy's edge is checked with no fee, against its own minimum
+("Minimum edge, post-only" on the AI Agents page, 5¢ to start). It starts higher than the ordinary
+minimum because resting bids tend to fill when the price is moving against them.
+
+Each fill in Track and in `get_trade_history` now says whether it was a maker fill (your order was
+resting), a taker fill (it crossed) or mixed, as the exchange reported it. Fills recorded before
+this update don't have it.
+
+### Market making in scripts (shadow only)
+Scripts have a new hook, `quote(ctx)`, for resting a bid on Up and on Down at the same time. The
+script returns the two prices it wants resting each tick, and the app moves or pulls the bids to
+match. It is simulated only: nothing is sent to the exchange, and a script that is armed for real
+orders has its `quote()` skipped. A simulated bid fills, with no fee, when that side's ask is later
+seen at or below it. Those are the fills where the price came through the bid, the kind that lost
+in the live test, so the shadow record is on the pessimistic side. The app holds each side of a
+window to an inventory limit (20 contracts to start) on top of the existing script caps. A
+"Two-Sided Quoter" example is in the script editor. `quote()` is not replayed by the backtester,
+and whether it makes money on Polymarket US has not been measured.
+
+### The 15-minute model
+The model's probability and edge figure were tested on every resolved 15-minute window recorded so
+far (3,106 windows over 10 days). The model was not a better forecast than the market price. Buying
+whenever it showed 2¢ or more of edge after the fee won 46% of the time at an average 46¢ ask, where
+the model had said 52%, and lost about 1.6¢ a share (95% interval −3.3¢ to +0.1¢). A bigger edge
+figure did no better, momentum indicators added nothing on held-out days, and feeding the model the
+settlement index instead of the Coinbase price made it worse. The model and the engine's settings
+are unchanged. The figure is now labelled as a disagreement with the price, not an edge, on the
+Crypto page, in the script docs and in what AI agents are told.
+
+### Orders
+A buy is refused when no price could be read for the market. In a new window's first minutes a
+failed read could pass as an empty book, and the buy went out with nothing to check its price
+against. Selling is not refused. The order ticket and the "resting" message now show the best bid
+and ask whenever the market has a quote, not only when the full book loaded.
+
+### Track
+An open position no longer appears in the settled record as "unknown" with a settle time in the
+future. "Unknown" now only means a closed market whose result couldn't be read.
+
+### AI agents
+A resting order that filled later now shows as filled in `get_orders`, with its average price.
+`preview_order` says how old your forecast is and how far the price has moved since, and warns when
+it has moved 5¢ or more. A refused argument now lists the arguments the tool takes. Live-feed quotes
+report their real age instead of 0 seconds. `research_data` explains the units and side of the
+recorded tick columns, and `get_status` says which P&L figures are all-time.
+
+### Logs and the main loop
+A network drop now writes one line per feed and one per endpoint. It used to write a line per
+market and a stack trace per feed. Log times are in UTC and say so. Warnings show as warnings on
+the Logs page; they were unstyled and the Warn filter missed them. The price feed's retry wait
+starts over after each reconnect. The research recorder runs in the background, so a slow network
+no longer holds up scripts and Terminal stops behind it.
 
 ## [0.3.0] — 2026-11-06
 

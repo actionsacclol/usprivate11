@@ -110,6 +110,30 @@ class _StdoutHandler(logging.Handler):
             pass
 
 
+def _log_formatter() -> logging.Formatter:
+    """UTC with a Z, like the database, the agent tools and the market slugs.
+    Lines used to carry local time with no zone, so matching a log line to a
+    fill meant knowing which zone the machine was in."""
+    fmt = logging.Formatter(
+        "[%(asctime)s] %(levelname)-7s %(name)s: %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%SZ",
+    )
+    fmt.converter = time.gmtime
+    return fmt
+
+
+class _DroppedLinkFilter(logging.Filter):
+    """The websockets library logs a dropped link as an ERROR with a traceback
+    when the OS reports it as a bare OSError (Windows: "[WinError 121] The
+    semaphore timeout period has expired"). Each feed's own loop already says
+    it disconnected, once, and reconnects. Any other exception keeps its
+    traceback."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        info = record.exc_info
+        return not (isinstance(info, tuple) and isinstance(info[1], OSError))
+
+
 def _setup_logging() -> None:
     log_dir_base = os.environ.get("KRYPT_POLYBOT_US_USERDATA")
     if log_dir_base:
@@ -117,10 +141,7 @@ def _setup_logging() -> None:
     else:
         log_dir = Path(__file__).resolve().parent / "logs"
     log_dir.mkdir(parents=True, exist_ok=True)
-    fmt = logging.Formatter(
-        "[%(asctime)s] %(levelname)-7s %(name)s: %(message)s",
-        datefmt="%Y-%m-%d %H:%M:%S",
-    )
+    fmt = _log_formatter()
     root = logging.getLogger()
     root.setLevel(logging.INFO)
     fh = logging.handlers.RotatingFileHandler(
@@ -142,6 +163,7 @@ def _setup_logging() -> None:
         pass
     logging.getLogger("httpx").setLevel(logging.WARNING)
     logging.getLogger("httpcore").setLevel(logging.WARNING)
+    logging.getLogger("websockets.client").addFilter(_DroppedLinkFilter())
 
 
 # ────────────────────────────────────────────────────────────────────
@@ -701,6 +723,54 @@ def _whale_collection_on(cfg: dict) -> bool:
     return False
 
 
+def _single_flight(current: asyncio.Task | None, coro_fn) -> asyncio.Task | None:
+    """Start `coro_fn()` as a background task unless `current` is still running.
+    Returns the new task, or None when one is already in flight."""
+    if current and not current.done():
+        # A pending task belonging to a DEAD event loop (the process re-entered
+        # asyncio.run, or a test drove the loop in its own) can never complete,
+        # and treating it as in-flight would wedge it forever.
+        try:
+            alive = current.get_loop() is asyncio.get_event_loop()
+        except RuntimeError:
+            alive = True
+        if alive:
+            return None
+    try:
+        task = asyncio.get_event_loop().create_task(coro_fn())
+    except RuntimeError:
+        return None
+    _bg_tasks.add(task)
+    task.add_done_callback(_bg_tasks.discard)
+    return task
+
+
+# ── the research recorder, off the master loop ──────────────────────
+# One pass reads every live window's market, book and spot. During a network
+# drop each of those reads waits out its timeout, and awaited in line that held
+# the scripts, terminal stops and every other block behind it (live 2026-11-08:
+# iterations of 20 to 40 seconds). Nothing downstream needs the rows in the
+# same tick. Single-flight, so a slow pass delays the next recording instead.
+_c15_record_task: asyncio.Task | None = None
+
+
+def _start_c15_record(cfg: dict) -> bool:
+    """Start a background recorder pass. False if one is already in flight."""
+    global _c15_record_task
+
+    async def _run() -> None:
+        try:
+            await crypto15m_record.record_tick(cfg)
+        except Exception as e:  # noqa: BLE001
+            logger.debug(f"crypto15m record error: {e}")
+
+    task = _single_flight(_c15_record_task, _run)
+    if task is None:
+        return False
+    _c15_record_task = task
+    return True
+
+
 # ── market sync, off the master loop ────────────────────────────────
 # A full sync is ~10 Gamma pages plus ~1,000 sqlite upserts. Nothing downstream
 # needs it in the same tick (the markets table is read by the NEXT scan), so
@@ -714,16 +784,6 @@ _market_sync_task: asyncio.Task | None = None
 def _start_market_sync(max_pages: int = 10) -> bool:
     """Start a background market sync. False if one is already in flight."""
     global _market_sync_task
-    if _market_sync_task and not _market_sync_task.done():
-        # A pending task belonging to a DEAD event loop (the process re-entered
-        # asyncio.run, or a test drove the loop in its own) can never complete,
-        # and treating it as in-flight would wedge the sync forever.
-        try:
-            alive = _market_sync_task.get_loop() is asyncio.get_event_loop()
-        except RuntimeError:
-            alive = True
-        if alive:
-            return False
 
     async def _run() -> None:
         try:
@@ -732,12 +792,10 @@ def _start_market_sync(max_pages: int = 10) -> bool:
         except Exception as e:
             logger.warning(f"market sync failed: {e}")
 
-    try:
-        _market_sync_task = asyncio.get_event_loop().create_task(_run())
-    except RuntimeError:
+    task = _single_flight(_market_sync_task, _run)
+    if task is None:
         return False
-    _bg_tasks.add(_market_sync_task)
-    _market_sync_task.add_done_callback(_bg_tasks.discard)
+    _market_sync_task = task
     return True
 
 
@@ -1104,8 +1162,10 @@ async def _scanner_and_trader_loop() -> None:
                     cfg.get("crypto15m_record_signals", True)
                     and now - last_crypto15m_record >= 25
                 ):
-                    await crypto15m_record.record_tick(cfg)
-                    last_crypto15m_record = now
+                    # Detached (see _start_c15_record): a pass still running
+                    # is left to finish, and the next one waits its turn.
+                    if _start_c15_record(cfg):
+                        last_crypto15m_record = now
         except Exception as e:
             logger.debug(f"crypto15m record error: {e}")
 
@@ -2136,6 +2196,9 @@ async def _h_alerts(_p: dict) -> dict:
         "accountLock": _safe("account lock", _lock, None),
         "balanceStale": live and bool(STATE.auth_ok)
         and _safe("balance", trader.portfolio_stale, False),
+        # A market that can't be read during an outage is not an unknown market.
+        "unknownPositions": [] if polymarket_api.api_outages()
+        else _safe("unknown positions", trader.unknown_positions, []),
         "healthRows": rows,
         "endedClients": mcp_server.ended_clients() if cfg.get("mcp_enabled") else [],
         "stoppedScripts": _safe("scripts", _stopped_scripts, []),
@@ -2318,6 +2381,11 @@ async def _h_botRuns(p: dict) -> dict:
             db.get_active_run(conn, polymarket_auth.get_env())
             if STATE.active_run_id else None
         )
+        # Net of deposits and withdrawals, for runs stored before that was netted too.
+        for r in rows + ([active] if active else []):
+            net = db.run_pnl(conn, r)
+            if net is not None:
+                r["pnl_usd"] = net
     return {
         "runs": [_run_row_to_js(r) for r in rows],
         "activeRunId": STATE.active_run_id,
@@ -3391,6 +3459,8 @@ async def _h_script_api_docs(_p: dict) -> dict:
             {"name": "Momentum Confirm (stateful)", "code": script_docs.EXAMPLE_STATEFUL},
             {"name": "Trailing Exit (manage hook)", "code": script_docs.EXAMPLE_MANAGE},
             {"name": "Night Shift (supervisor)", "code": script_docs.EXAMPLE_SUPERVISOR},
+            {"name": "Two-Sided Quoter (quote hook, shadow only)",
+             "code": script_docs.EXAMPLE_QUOTER},
         ],
         # One-click Strategy presets (Simple mode's Strategies page). Served
         # from the backend so the code can never drift from the shipped

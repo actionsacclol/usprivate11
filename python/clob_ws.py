@@ -159,6 +159,11 @@ class ClobMarketFeed:
             "ask_cents": us.ask_cents(ask),
         }
 
+    def quote_age_sec(self, token_id: Optional[str]) -> Optional[float]:
+        """Seconds since the feed last heard about this token's book, or None."""
+        b = self._books.get(str(token_id)) if token_id else None
+        return max(0.0, time.monotonic() - b["ts"]) if b else None
+
     def quote_cents_if_fresh(self, token_id: Optional[str],
                              max_age: float = _STALE_AFTER) -> Optional[tuple[int, int]]:
         """(bid_cents, ask_cents) for the ORDER path: fresh, two-sided, uncrossed,
@@ -279,7 +284,12 @@ class ClobMarketFeed:
                 raise
             except Exception as e:  # noqa: BLE001 — degradable by design
                 self.last_error = f"{type(e).__name__}: {e}"
-                logger.debug(f"clob_ws connection error: {self.last_error}")
+                if self.connected:
+                    # One line per drop. Retries that never connect stay quiet.
+                    why = f"; {type(e.__cause__).__name__}: {e.__cause__}" if e.__cause__ else ""
+                    logger.warning(f"clob_ws: disconnected ({self.last_error}{why}); reconnecting")
+                else:
+                    logger.debug(f"clob_ws connection error: {self.last_error}")
             finally:
                 self.connected = False
             if self._stop:

@@ -305,8 +305,69 @@ def test_an_unknown_order_that_filled_counts_and_is_promoted(fresh, monkeypatch)
 
     assert mcp_rails.promote_from_ledger() == 1
     [row] = _rows()
-    assert row["ok"] == 1 and row["status"] is None and row["filled"] == 10.0
+    # 10 of 10 on the ledger: placed, and nothing of it is left to fill.
+    assert row["ok"] == 1 and row["status"] == "filled" and row["filled"] == 10.0
+    assert row["avg_fill_cents"] == 50.0
     assert mcp_rails.spent_today("live") == 5.0
+
+
+def _sent_gtc(conn, oid, *, action="buy", size=10, filled=0, status=None):
+    conn.execute(
+        "INSERT INTO mcp_orders (created_at, network, mode, agent_id, condition_id, "
+        "side, action, order_type, size, price_cents, committed_usd, ok, order_id, "
+        "filled, status, message) VALUES (datetime('now'),'mainnet','live','default',"
+        "'0xabc','yes',?,'GTC',?,50,?,1,?,?,?,'Resting at 50¢ — nothing has filled')",
+        (action, size, 5.0 if action == "buy" else None, oid, filled, status))
+
+
+def _ledger_fill(conn, trade, oid, size, price, action="buy"):
+    conn.execute(
+        "INSERT INTO terminal_fills (trade_id, order_id, condition_id, side, action, "
+        "size, price_cents, origin, network, filled_at) "
+        "VALUES (?,?,'0xabc','yes',?,?,?,'ai','mainnet',datetime('now'))",
+        (trade, oid, action, size, price))
+
+
+def test_a_resting_order_that_filled_later_is_booked_filled(fresh, monkeypatch):
+    """Live test 2026-11-07: 125 filled GTC orders kept status NULL, filled 0 and
+    'Resting … nothing has filled' for good. The venue sync skips a row whose
+    ledger covers its size, and nothing else looked."""
+    import mcp_rails
+    _live(monkeypatch)
+    with db.get_db() as conn:
+        _sent_gtc(conn, "0xrest")
+        _ledger_fill(conn, "t1", "0xrest", 4, 50)
+        _ledger_fill(conn, "t2", "0xrest", 6, 45)
+    mcp_rails.promote_from_ledger()
+    [row] = _rows()
+    assert (row["status"], row["filled"], row["avg_fill_cents"]) == ("filled", 10.0, 47.0)
+    assert row["message"] == "Filled 10 YES at 47¢."
+    assert row["committed_usd"] == 5.0, "the cap keeps the order's worst case"
+
+
+def test_a_partly_filled_resting_order_stays_open_at_its_ledger_fill(fresh, monkeypatch):
+    import mcp_rails
+    _live(monkeypatch)
+    with db.get_db() as conn:
+        _sent_gtc(conn, "0xpart")
+        _ledger_fill(conn, "t1", "0xpart", 4, 50)
+    mcp_rails.promote_from_ledger()
+    [row] = _rows()
+    assert (row["status"], row["filled"], row["avg_fill_cents"]) == (None, 4.0, 50.0)
+    assert "Resting" in row["message"]
+
+
+def test_a_filled_resting_sell_comes_off_the_agents_exposure(fresh, monkeypatch):
+    import mcp_rails
+    _live(monkeypatch)
+    with db.get_db() as conn:
+        _sent_gtc(conn, "0xbuy", filled=10, status="filled")
+        _ledger_fill(conn, "t1", "0xbuy", 10, 50)
+        _sent_gtc(conn, "0xsell", action="sell")
+        _ledger_fill(conn, "t2", "0xsell", 10, 55, action="sell")
+    before = mcp_rails.live_exposure("0xabc", "default")
+    mcp_rails.promote_from_ledger()
+    assert before == 10.0 and mcp_rails.live_exposure("0xabc", "default") == 0.0
 
 
 def test_an_unknown_fak_is_closed_at_its_ledger_fill_on_reconcile(fresh, monkeypatch):

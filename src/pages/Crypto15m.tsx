@@ -1271,17 +1271,17 @@ function AssetCard({ a }: { a: Crypto15mAsset }) {
             </div>
           )}
           {a.modelProb != null && (
-            <div className={cls(
+            <div
+              title="The app's own spot model against the price, after the fee. On 3,106 recorded 15-minute windows the model was not a better forecast than the market price: buying when this showed +2¢ or more won 46% at an average 46¢ ask and lost about 1.6¢ a share. Read it as a disagreement, not an edge."
+              className={cls(
               'flex items-center justify-between rounded-md border px-2 py-1 text-[11px]',
-              (a.edgeNetCents ?? -1) >= 2
-                ? 'border-krypt-purple/50 bg-krypt-purple/10 text-krypt-purple'
-                : 'border-krypt-border bg-krypt-surface2 text-krypt-dim',
+              'border-krypt-border bg-krypt-surface2 text-krypt-dim',
             )}>
-              <span>Model</span>
+              <span>Model vs price</span>
               <span className="font-mono">
                 {Math.round(a.modelProb * 100)}%{a.modelProb >= 0.5 ? '↑' : '↓'}
                 {a.edgeNetCents != null && (
-                  <span className={cls('ml-2', a.edgeNetCents >= 0 ? 'text-krypt-win' : 'text-krypt-loss')}>
+                  <span className="ml-2 text-krypt-muted">
                     {a.edgeNetCents >= 0 ? '+' : ''}{a.edgeNetCents.toFixed(1)}¢
                   </span>
                 )}

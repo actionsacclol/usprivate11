@@ -993,6 +993,11 @@ def _init_db_schema() -> None:
             # 1 once filled_at comes from the venue's own trade rows. 0 means it is
             # only when a reconcile pass first saw the fill.
             "ALTER TABLE terminal_fills ADD COLUMN filled_at_exact INTEGER DEFAULT 0",
+            # maker | taker | mixed, from the venue's own trade rows. NULL until a
+            # true-up has read them; fills from before this column stay NULL.
+            "ALTER TABLE terminal_fills ADD COLUMN liquidity TEXT DEFAULT NULL",
+            # 1 for an agent order sent post-only (rest or be rejected, never take).
+            "ALTER TABLE mcp_orders ADD COLUMN post_only INTEGER DEFAULT 0",
             "ALTER TABLE alerts ADD COLUMN yes_sub_title TEXT DEFAULT ''",
             "ALTER TABLE bot_runs ADD COLUMN start_trades_opened INTEGER DEFAULT 0",
             "ALTER TABLE bot_runs ADD COLUMN start_trades_won INTEGER DEFAULT 0",
@@ -2520,7 +2525,9 @@ def resolve_script_shadow(conn, fee_fn, market_results: dict | None = None,
         category = ("crypto" if str(r.get("source")) == "crypto"
                     else str(r.get("asset") or ""))
         try:
-            fee = float(fee_fn(cost, category))
+            # POST is a quote() bid that rested: a maker fill, which pays no fee.
+            fee = (0.0 if str(r.get("order_type") or "") == "POST"
+                   else float(fee_fn(cost, category)))
         except Exception:
             fee = 0.0
         per_ct = (1.0 - cost - fee) if won else (-cost - fee)
@@ -3394,17 +3401,37 @@ def heartbeat_bot_run(
               SET end_cash_usd = ?,
                   end_portfolio_usd = ?,
                   end_total_usd = ?,
-                  pnl_usd = ? - start_total_usd,
+                  pnl_usd = ? - start_total_usd - ?,
                   trades_opened = MAX(0, ? - start_trades_opened),
                   trades_won    = MAX(0, ? - start_trades_won),
                   trades_lost   = MAX(0, ? - start_trades_lost)
             WHERE id = ?""",
         (
             float(cash_usd), float(portfolio_usd), total, total,
+            run_transfers(conn, int(run_id)),
             int(lifetime_trades), int(lifetime_wins), int(lifetime_losses),
             int(run_id),
         ),
     )
+
+
+def run_transfers(conn, run_id: int) -> float:
+    """Deposits (+) and withdrawals (−) detected during a run. A run's P&L is
+    its balance change less these: a $25.39 withdrawal in the middle of a run
+    was stored as $25.39 of trading losses (live 2026-11-08, run 2: −$37.78
+    shown for a run that lost $12.39)."""
+    row = conn.execute("SELECT network FROM bot_runs WHERE id = ?", (int(run_id),)).fetchone()
+    return transfer_adjustment_run(conn, str(row[0] or "mainnet"), int(run_id)) if row else 0.0
+
+
+def run_pnl(conn, r: dict) -> float | None:
+    """A run row's P&L net of transfers, from its own balances. Rows written
+    before run_transfers existed stored the raw balance change, so readers
+    use this, not the stored column. None before the first balance read."""
+    if r.get("end_total_usd") is None or r.get("start_total_usd") is None:
+        return None
+    return (float(r["end_total_usd"]) - float(r["start_total_usd"])
+            - run_transfers(conn, int(r["id"])))
 
 
 def end_bot_run(conn, run_id: int) -> None:

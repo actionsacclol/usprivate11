@@ -294,11 +294,14 @@ async def call(name: str, args: dict, session: dict) -> dict:
     unknown = set(args) - set(t.props)
     token = _SESSION.set(session)
     try:
+        # Say what the tool does take: an agent that guessed `query` for `sql`
+        # otherwise has to re-read the whole tool list to find out.
+        takes = f"{name} takes: {', '.join(t.props) or 'no arguments'}"
         if unknown:
-            raise Refused(f"unknown argument(s): {', '.join(sorted(unknown))}")
+            raise Refused(f"unknown argument(s): {', '.join(sorted(unknown))}. {takes}")
         missing = [r for r in t.required if args.get(r) in (None, "")]
         if missing:
-            raise Refused(f"missing required argument(s): {', '.join(missing)}")
+            raise Refused(f"missing required argument(s): {', '.join(missing)}. {takes}")
         result = await t.fn(args)
     except Refused as e:
         session["refused"] = session.get("refused", 0) + 1
@@ -341,12 +344,13 @@ _SIDE = {"type": "string", "enum": ["yes", "no"],
 _MODE = {"type": "string", "enum": ["paper", "live"],
          "description": "Optional. The user sets which mode you trade in (see "
                         "get_status yourMode); pass it only to confirm it. On "
-                        "read tools it picks the account: paper = your own "
-                        "simulated account, live = the real account."}
+                        "get_portfolio and get_orders it picks the account: "
+                        "paper = your own simulated account, live = the real "
+                        "account. Tools that don't list it don't take it."}
 _LIMIT = {"type": "integer", "minimum": 1, "maximum": 500}
 _CONFIG = {"type": "object", "description":
            "Config keys to override for this run only (snake_case, as "
-           "returned by get_config). Never saved."}
+           "returned by get_status with include_config=true). Never saved."}
 _SINCE = {"type": "integer", "minimum": 1, "maximum": 365,
           "description": "Days of recorded data to replay (default 60)."}
 
@@ -363,7 +367,11 @@ _SINCE = {"type": "integer", "minimum": 1, "maximum": 365,
       "today — account connection, which engines run, and paper/offline mode. "
       "Call this first. include_config=true adds the full engine "
       "configuration (snake_case keys). include_account=true adds the live "
-      "account's cash, value and P&L.",
+      "account's cash, value and P&L. In account, roiPct and alltimePnlUsd "
+      "are ALL-TIME for this install (measured from alltimeBaselineUsd), "
+      "not today or this session; todayPnlUsd is the balance change since "
+      "00:00 UTC, and sessionPnlUsd since the engines were last started. "
+      "All are the whole account, not only your trades.",
       props={"include_config": {"type": "boolean"},
              "include_account": {"type": "boolean"}}, read_only=True)
 async def _get_status(a: dict) -> dict:
@@ -576,7 +584,9 @@ async def _get_orders(a: dict) -> dict:
 @tool("get_trade_history", "Trade history",
       "Live-account history. kind=fills: the venue's own fill ledger; ts is the "
       "last trade's time when tsExact is true, otherwise only when a reconcile "
-      "saw the fill. A null feeUsd is not yet known, not free. "
+      "saw the fill. A null feeUsd is not yet known, not free. liquidity is "
+      "the exchange's own word on each fill: maker (your order was resting; "
+      "no fee), taker (it crossed), mixed, or null when not read yet. "
       "kind=order_log: every order sent from this app including failures, "
       "with origin (ai = you). kind=settled: resolved positions and the real "
       "win/loss record; totals.pnlUsd is after fees and covers only finished "
@@ -597,12 +607,25 @@ async def _get_trade_history(a: dict) -> dict:
     raise Refused("kind must be fills, order_log or settled.")
 
 
+# Measured 2026-11-13 on every resolved 15-minute window then recorded (3,106
+# windows in 777 time slots over 10 days; intervals resample whole slots). The
+# test agent of 2026-11-07/08 had copied these figures into its forecasts.
+MODEL_CAVEAT = (
+    "modelProb, edgeNetCents and modelEdgePts come from the app's own spot "
+    "model, and it is NOT a better forecast than the market price: on 3,106 "
+    "recorded 15-minute windows its Brier score was worse than the mid's, and "
+    "buying whenever edgeNetCents was 2 or more won 46% of the time at an "
+    "average 46c ask (the model had said 52%), -1.6c a share after the fee "
+    "(95% interval -3.3 to +0.1). Larger values did no better. Do not take "
+    "it as an edge or copy it into a forecast.")
+
+
 @tool("get_engine_activity", "Engine activity",
       "What the automated engines are doing. kind=positions: main-engine "
       "positions. kind=signals: signals from before the venue had none (normally "
       "empty). kind=pnl: P&L "
       "series. kind=scanner: scanner stats. kind=crypto15m: the short-term "
-      "crypto engine's status.",
+      "crypto engine's status. " + MODEL_CAVEAT,
       props={"kind": {"type": "string", "enum": [
           "positions", "signals", "pnl", "scanner", "crypto15m"]},
              "limit": _LIMIT},
@@ -635,6 +658,7 @@ async def _get_engine_activity(a: dict) -> Any:
       "markets), or crypto_updown — a live snapshot of Polymarket's recurring "
       "crypto Up-or-Down markets (5m / 15m / hourly / 4h; BTC, ETH, SOL, XRP, "
       "DOGE, BNB, HYPE, ZEC) with window timing, spot, prices and indicators. "
+      + MODEL_CAVEAT + " "
       "filters is optional, e.g. {\"minVolume24hUsd\": 10000, "
       "\"categories\": [\"politics\"]}.",
       props={"column": {"type": "string", "enum": [
@@ -683,8 +707,11 @@ async def _get_market(a: dict) -> dict:
 
 
 @tool("get_order_book", "Order book",
-      "The live order book for one side, in cents and contracts, plus "
-      "microstructure (imbalance, depth) when include_micro is true.",
+      "The order book for one side, in cents and contracts, plus "
+      "microstructure (imbalance, depth) when include_micro is true. The "
+      "levels are a snapshot the exchange can serve up to 30 seconds old; "
+      "for the price right now use get_market, whose bid and ask say where "
+      "they came from and how old they are (sources.bid.ageSec).",
       props={"conditionId": _CID, "side": _SIDE,
              "include_micro": {"type": "boolean"}},
       required=("conditionId",), read_only=True)
@@ -780,6 +807,14 @@ _ORDER_PROPS = {
                   "description": "GTC rests on the book (default); FAK fills "
                                  "what it can and kills the rest; FOK all or "
                                  "nothing."},
+    "postOnly": {"type": "boolean",
+                 "description": "GTC only. The order may rest and may never take: "
+                                "if it would trade right away it is refused and "
+                                "nothing is sent. A fill is always a maker fill and "
+                                "pays no fee, so a post-only buy's edge is checked "
+                                "with no fee against its own minimum (get_status "
+                                "rails.minEdgeRestingCents). Resting bids tend to "
+                                "fill when the price is moving against them."},
     "forecastId": {"type": "integer", "minimum": 1,
                    "description": "Required for a buy: the id record_forecast "
                                   "returned for this market (yours, < 30 min old)."},
@@ -792,7 +827,9 @@ _ORDER_REQ = ("conditionId", "side", "action", "size", "priceCents")
       "Polymarket's fee, your caps, rules, the loss stop, what you may sell — "
       "and price the order against the live book WITHOUT sending it: cost, "
       "fee, what is fillable now and at what average, slippage, tick and "
-      "minimum size. wouldPlace=false comes with the blockers.",
+      "minimum size. wouldPlace=false comes with the blockers. On a buy, "
+      "forecast says how old your forecast is and how far the YES mid has "
+      "moved since you recorded it (null when either price was not read).",
       props=_ORDER_PROPS, required=_ORDER_REQ, read_only=True)
 async def _preview(a: dict) -> dict:
     cfg = _cfg()
@@ -805,6 +842,8 @@ async def _preview(a: dict) -> dict:
         "mode": mode, "wouldPlace": not v.blockers,
         "blockers": v.blockers, "warnings": v.warnings,
         "edgeCentsAfterFee": v.edge,
+        "postOnly": bool(v.req.get("postOnly")),
+        "forecast": v.forecast,
         ("costUsd" if v.req["action"] == "buy" else "proceedsUsd"): v.cost,
         "approvalNeeded": mode == "live" and bool(cfg.get("mcp_live_approval", True)),
         "ticket": {k: pv.get(k) for k in (
@@ -1203,7 +1242,7 @@ LIVE = frozenset({
     "crypto15m_autosize_to_min_notional", "crypto15m_stop_loss_pct",
     "crypto15m_model_autopause",
                                 "script_max_entry_cents", "script_max_contracts", "script_max_open",
-    "script_daily_loss_usd", "script_max_enabled", "script_market_max_spread_cents",
+    "script_quote_max_inventory", "script_daily_loss_usd", "script_max_enabled", "script_market_max_spread_cents",
 })
 
 SETTINGS = frozenset({
@@ -1474,6 +1513,23 @@ def _query_ro(sql: str, limit: int) -> dict:
         conn.close()
 
 
+# What a column list cannot say: units, and which side a price is for. Two
+# columns one letter apart in crypto15m_ticks hold different units for
+# different sides, and a query that mixed them read as an 8% edge.
+_SCHEMA_NOTES = {
+    "crypto15m_ticks": (
+        "yes_bid, yes_ask, up_prob, up_ask and no_ask are fractions from 0 to 1. "
+        "yes_* and up_* are the Up (YES) side; no_ask is the Down (NO) side. "
+        "ws_bid and ws_ask are CENTS (1 to 99) and are for the FAVOURITE side at "
+        "that tick: the Up side when up_prob >= 0.5, otherwise the Down side. Do "
+        "not compare ws_* with yes_* without converting both the unit and the "
+        "side. edge_net_cents is cents; model_prob is a fraction, and neither "
+        "has beaten the market price (see discover_markets). observed_at "
+        "is UTC. Outcomes: join crypto15m_signals on ticker (up_won)."),
+    "all tables": "Timestamps are UTC. A NULL means the value was not read; it is not zero.",
+}
+
+
 def _schema() -> list[dict]:
     import db
     with db.get_db() as conn:
@@ -1494,7 +1550,9 @@ def _schema() -> list[dict]:
       "`limit` rows (default 200, max 2000; 20s budget) — test your own "
       "hypotheses here before backtesting or trading them. "
       "include_crypto_history adds the crypto engine's resolved trades.",
-      props={"sql": {"type": "string"},
+      props={"sql": {"type": "string", "description":
+                     "One read-only SQLite SELECT. Leave it out for the inventory "
+                     "and schema."},
              "limit": {"type": "integer", "minimum": 1, "maximum": _SQL_MAX_ROWS},
              "include_crypto_history": {"type": "boolean"}}, read_only=True)
 async def _research(a: dict) -> dict:
@@ -1503,7 +1561,8 @@ async def _research(a: dict) -> dict:
         limit = max(1, min(_SQL_MAX_ROWS, int(a.get("limit") or 200)))
         return await asyncio.to_thread(_query_ro, str(a["sql"]), limit)
     out = {"collection": await service._h_collection_stats({}),
-           "schema": await asyncio.to_thread(_schema)}
+           "schema": await asyncio.to_thread(_schema),
+           "notes": _SCHEMA_NOTES}
     if a.get("include_crypto_history"):
         out["cryptoHistory"] = await service._h_c15_history({"limit": 200})
     return out

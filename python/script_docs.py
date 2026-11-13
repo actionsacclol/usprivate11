@@ -39,8 +39,8 @@ FIELD_DOCS: dict[str, str] = {
     "spotUsd": "float|None — live underlying price, USD",
     "strikeUsd": "float|None — the window-open reference the market settles against, USD",
     "spotLive": "bool — a live websocket spot feed is up (vs slower REST)",
-    "modelProb": "float|None — the app's terminal-spot model P(up), 0..1",
-    "edgeNetCents": "float|None — the model's best fee-net edge across both sides, cents",
+    "modelProb": "float|None — the app's terminal-spot model P(up), 0..1. Measured: NOT a better forecast than upProb (the market's mid)",
+    "edgeNetCents": "float|None — modelProb against the better side's ask, after the fee, cents. Measured: buying at 2 or more made -1.6c a share; bigger did no better",
     "macd": "float|None — MACD line on 1-min underlying closes",
     "macdSignal": "float|None — MACD signal line",
     "macdHist": "float|None — MACD histogram (macd - signal)",
@@ -57,7 +57,7 @@ FIELD_DOCS: dict[str, str] = {
     "change5mPct": "float|None — 5-minute percent change",
     "change15mPct": "float|None — 15-minute percent change",
     "spreadCents": "float|None — yes ask minus yes bid, in cents (book width / liquidity: a wide spread means a costly round trip)",
-    "modelEdgePts": "float|None — signed (modelProb - upProb) in percentage points: >0 = the model thinks UP is underpriced vs the book's mid",
+    "modelEdgePts": "float|None — signed (modelProb - upProb) in percentage points: >0 = the model thinks UP is underpriced vs the book's mid. Measured: these disagreements were noise, not signal",
     "favoriteAskCents": "float|None — the favorite side's REAL executable ask in cents (None = no live book on that side)",
     "timeFracLeft": "float|None — fraction of the window still to run, 0..1 — use this instead of minsLeft to write one script that works on the 5m, 15m and hourly series",
     "feeSchedule": "dict|None — this market's own fee schedule {enabled, rate, exponent}; taker fee/share = rate x P x (1-P) dollars (crypto default rate 0.07). None = assume the crypto default",
@@ -113,7 +113,7 @@ ctx["portfolio"] is always present: {"balanceUsd" (None in backtests),
 logic.
 
 OPTIONAL HOOKS (define any subset; a script must define at least one of
-decide / decide_market / manage / decide_signal / supervise):
+decide / decide_market / manage / decide_signal / supervise / quote):
 
     def manage(position, ctx):
         # Called every tick for EACH open position this script holds.
@@ -171,6 +171,29 @@ decide / decide_market / manage / decide_signal / supervise):
         # run while the script is in shadow mode — it is the one hook that
         # changes the REAL engine, so shadow skips it (the heartbeat says so).
         # Arm the script to let it supervise.
+
+    def quote(ctx):
+        # Market making, SIMULATED ONLY. Called once per coin per tick with the
+        # same ctx as decide() plus ctx["quotes"]. Return None for no bids on
+        # this window, or the bids you want RESTING right now:
+        #   {"up": <int cents 1-99> | None,    # your bid for UP, None = none
+        #    "down": <int cents 1-99> | None,  # your bid for DOWN
+        #    "size": <int>,                    # contracts per bid (optional)
+        #    "reason": "<short note>"}
+        # The engine makes the book match your answer every tick: a new price
+        # replaces the old bid, None pulls it. Bids are post-only, so one at
+        # or above that side's ask is not placed, and a side with no live ask
+        # gets no bid. ctx["quotes"]: {"up"/"down": your resting bid
+        # {priceCents, size, ageSec} or None, "inventory": {"up": n, "down": n}
+        # contracts already filled in this window, "avgCostCents": {"up": c,
+        # "down": c}, "maxInventory": the per-side limit the user set}.
+        # A bid fills, with no fee, when that side's ask is later seen at or
+        # below it: the fills where the market came through you. Fills from
+        # ordinary selling at the touch cannot be proven from the book and are
+        # NOT counted, so this record is pessimistic. Up and Down filled for
+        # under 100c together pay $1 whichever way the window settles.
+        # quote() runs ONLY while the script is in shadow mode (an armed
+        # script's quote() is skipped) and is NOT simulated in backtests.
 
     def on_start(state):            # once when the script loads
     def on_fill(position, state):   # an entry order filled
@@ -278,6 +301,45 @@ def supervise(app):
     if app["engines"]["momentum"] == quiet:
         changes["trade_momentum"] = not quiet
     return {"set": changes} if changes else None
+'''
+
+EXAMPLE_QUOTER = '''\
+# krypt-script v1
+# name: Two-Sided Quoter
+# description: Rests a bid under the market on Up and on Down, re-prices as it moves, and stops adding to the heavier side. Shadow only.
+
+# quote() is simulated: nothing here reaches the exchange. Its fills are the
+# ones where the market came through the bid, so a profit here is a profit on
+# the worst fills. Nothing about this has been measured on Polymarket US.
+
+EDGE_CENTS = 3         # how far under each side's middle price to bid
+SIZE = 5               # contracts per bid
+MAX_SKEW = 5           # stop bidding a side once it is this far ahead of the other
+MIN_MINS_LEFT = 4.0    # no bids late in the window, where the price moves fastest
+MAX_SPREAD_CENTS = 6   # a wide book means nobody agrees on the price: stay out
+
+
+def quote(ctx):
+    ml = ctx["minsLeft"]
+    up_ask, down_ask = ctx["upAsk"], ctx["downAsk"]
+    if ml is None or ml < MIN_MINS_LEFT or up_ask is None or down_ask is None:
+        return None            # None pulls any bid still resting
+    # The two asks add up to 100c plus the spread.
+    spread = (up_ask + down_ask - 1.0) * 100.0
+    if spread < 0 or spread > MAX_SPREAD_CENTS:
+        return None
+    up_mid = (up_ask * 100.0 + (100.0 - down_ask * 100.0)) / 2.0
+    down_mid = 100.0 - up_mid
+    held = ctx["quotes"]["inventory"]
+    skew = held["up"] - held["down"]
+    up_bid = int(up_mid - EDGE_CENTS)
+    down_bid = int(down_mid - EDGE_CENTS)
+    return {
+        "up": up_bid if skew < MAX_SKEW and 1 <= up_bid <= 99 else None,
+        "down": down_bid if -skew < MAX_SKEW and 1 <= down_bid <= 99 else None,
+        "size": SIZE,
+        "reason": f"mid {up_mid:.0f}/{down_mid:.0f}, skew {skew:+d}",
+    }
 '''
 
 
@@ -417,6 +479,7 @@ def build_context_pack(cfg: dict, env: str = "mainnet") -> str:
         f"- Max open positions for this script: {int(cfg.get('script_max_open') or 2)}\n"
         f"- Per-script daily loss auto-disable: ${float(cfg.get('script_daily_loss_usd') or 25.0):.0f}\n"
         f"- Default order size: {int(cfg.get('crypto15m_order_size') or 1)} contracts\n"
+        f"- quote(): at most {int(cfg.get('script_quote_max_inventory') or 20)} contracts held on one side of one window\n"
         "- Every new script starts in SHADOW mode: it runs against live ticks\n"
         "  and records the orders it WOULD have placed (settled from the real\n"
         "  window outcome, fees charged) without sending anything to the\n"
@@ -464,9 +527,15 @@ STRATEGY NOTES (hard-won, respect them):
 - upAsk/downAsk are the REAL order book. When they are None there is no
   executable quote and returning an intent does nothing useful — check them.
 - These markets are efficiently priced most of the time; blindly buying the
-  favorite loses the fee. An edge needs a reason: spot has moved and the
-  book lags, momentum persistence, model-vs-book divergence (modelProb vs
-  the ask), timing (minsLeft), regime filters (sigma1m, RSI).
+  favorite loses the fee. An edge needs a reason, and three obvious ones
+  were measured on 3,106 recorded 15-minute windows (10 days, Nov 2026) and
+  did NOT hold: (1) modelProb vs the ask: buying when edgeNetCents was 2 or
+  more won 46% at a 46c average ask and made -1.6c a share after the fee
+  (95% interval -3.3 to +0.1), and a bigger figure did no better; (2) the
+  momentum fields (velocity1mPct, change5mPct, change15mPct, MACD, RSI, the
+  EMA and VWAP gaps) added nothing to the mid price out of sample; (3) the
+  model's figure was no better late in the window than early. Anything
+  you build on those has to beat that record in shadow first.
 - Backtest fills are at the recorded ask, ticks are ~25s apart, and the
   panel is in-sample — a green backtest is a hypothesis, not a promise.
 - Positions hold to settlement unless you set take_profit_pct /

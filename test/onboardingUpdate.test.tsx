@@ -142,6 +142,22 @@ describe('GuideHost after an update', () => {
     expect(screen.queryByRole('dialog', { name: 'Onboarding (replay)' })).toBeNull();
   });
 
+  it('the first screen leads with the guide video, which opens on YouTube in the browser', () => {
+    render(host());
+    // Before the copy and the feature list, so nobody has to scroll to it.
+    const card = screen.getByTestId('youtube-guide-open');
+    expect(card.compareDocumentPosition(screen.getByText(/Connect the AI agent you already use/))
+      & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    // A picture shipped with the app and no player: nothing here loads from YouTube.
+    expect(card.querySelector('img')?.getAttribute('src') ?? '').not.toMatch(/^https?:/);
+    expect(document.querySelector('iframe, video')).toBeNull();
+    fireEvent.click(card);
+    expect(krypt.app.openExternal).toHaveBeenCalledWith('https://www.youtube.com/watch?v=r6k6yJFJ-Iw');
+    // Opening it is not acting in a step: the replay stays open and writes nothing.
+    expect(screen.getByRole('dialog', { name: 'Onboarding (replay)' })).toBeTruthy();
+    expect(krypt.config.update).not.toHaveBeenCalled();
+  });
+
   it('finishing it keeps the user on their page and offers the (new) tour once', async () => {
     const setPage = vi.fn();
     render(host(setPage));

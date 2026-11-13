@@ -7,11 +7,12 @@
  *  1 — before 3.0 (the field didn't exist; a missing value reads as 0)
  *  2 — 3.0: AI agents front and centre, Paper | Live, Autopilot
  *  3 — the bundled setup video on the welcome step
+ *  4 — 0.4.0: the owner's guide video on YouTube, first on the welcome step
  *
  * Before this, onboarding opened only while the disclaimer was unaccepted, so
  * the whole agent setup would never reach anyone upgrading.
  */
-export const ONBOARDING_REVISION = 3;
+export const ONBOARDING_REVISION = 4;
 
 /** What should open by itself on launch, if anything. */
 export function autoOnboarding(

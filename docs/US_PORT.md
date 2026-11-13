@@ -20,7 +20,7 @@ Forked from Krypt PolyBot at `1d92c62` (v3.5.0). This app trades the Polymarket 
 | Balance, positions and open orders read | Same run; the account held no positions, so a held position's fields weren't read |
 | Markets and private WebSockets connect | Same run: a live quote, and subscribed to our orders. No order event was checked |
 | Resting order placed, then canceled | Same run: size 1 probe at $0, canceled |
-| A NO order's price is on the YES side | Same run: the 0.201 probe appeared in the public book as an offer at 0.201, with no bid at 0.799. Buying NO unlocked for this key |
+| A NO order's price is on the YES side | Same run: the 0.201 probe appeared in the public book as an offer at 0.201, with no bid at 0.799 |
 | Real fills, buying and closing YES and NO | `--with-fill`, owner's account: size 1 on a BTC hourly market, each order `matched` and each position closed |
 | A held position's sign | Same run: YES reads as `netPosition` 1, NO as -1, as the app assumes |
 
@@ -179,7 +179,7 @@ All of these run on the way to the exchange in `place_limit_order`, and refuse l
 - **Throttle:** limits how many orders can go out.
 - **Price collar:** refuses a price too far through the touch. It allows 20¢ against a fresh quote and 40¢ against one that may be up to 30 seconds old, so it catches fat fingers rather than ordinary slippage. A buy is refused if no price can be read at all. A sell still goes, so a failed read can't trap anyone in a position.
 - **Self-cross check.**
-- **NO-buy lock**, until the live check passes.
+- **NO-buy lock.** Off unless the live check (`npm run py:orders`) has seen the exchange read a NO order's price on the NO side. Until 2026-11-13 it was on until that check had passed for the key on that machine. An installed build can't run the check, so only the owner's desktop could buy NO.
 
 ## Behaviour that differs from the original
 

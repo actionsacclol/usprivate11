@@ -132,6 +132,12 @@ class _Client:
                 # failure (e.g. a broken cert store) attempt grows unbounded
                 # and 2.0**1024 raises OverflowError INSIDE this handler —
                 # which killed the reconnect task for good after ~17h.
+                if self.connected:
+                    # The link was up, so this is a fresh drop, not another
+                    # failed try. The count used to reset only when the socket
+                    # closed cleanly, which a drop never does: after a few
+                    # drops every reconnect waited about a minute.
+                    attempt = 0
                 attempt = min(attempt + 1, 16)
                 backoff = min(2.0 ** attempt, _RECONNECT_MAX_SEC)
                 backoff *= random.uniform(0.75, 1.25)

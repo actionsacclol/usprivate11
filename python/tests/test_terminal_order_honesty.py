@@ -161,6 +161,69 @@ def test_a_resting_order_with_an_unreadable_book_does_not_invent_a_touch(
     assert "not a position until it fills" in r["message"]
 
 
+def _no_book(monkeypatch):
+    async def _b(cid, side="yes"):
+        return {"available": False, "bids": [], "asks": [], "bestBid": None, "bestAsk": None,
+                "note": "The exchange did not return a book for this market."}
+    monkeypatch.setattr(tt.term, "book", _b)
+
+
+def test_a_touch_the_market_read_has_is_quoted_without_the_book(fresh_db, monkeypatch):
+    """Live 2026-11-06: orders placed in a new window's first minutes, when its
+    book isn't served yet, were told "we could not read the touch" although the
+    market read had a live two-sided quote."""
+    _market(monkeypatch, asks=[(15.0, 500)], bids=[(13.0, 500)])
+    _no_book(monkeypatch)
+    _balance(monkeypatch, 50.0)
+
+    async def _place(**kw):
+        return _reply("0x2")
+
+    monkeypatch.setattr(tt.api, "place_limit_order", _place)
+    order = {"conditionId": "0xabc", "side": "yes", "action": "buy",
+             "priceCents": 14, "size": 5, "orderType": "GTC"}
+    pv = _run(tt.preview(order))
+    assert (pv["bestBidCents"], pv["bestAskCents"], pv["crossesNow"]) == (13.0, 15.0, False)
+    assert pv["fillableSize"] is None, "depth still needs the book"
+    assert any("Could not read the order book" in w for w in pv["warnings"])
+    r = _run(tt.place({**order, "confirmUsd": 0.70}))
+    assert "the best ask is 15¢" in r["message"], r["message"]
+    assert "could not read the touch" not in r["message"]
+
+
+def test_a_post_only_ticket_rests_for_no_fee_or_is_refused(fresh_db, monkeypatch):
+    """Post-only is how a bid is kept from ever paying the taker fee."""
+    _market(monkeypatch, asks=[(15.0, 500)], bids=[(13.0, 500)])
+    _balance(monkeypatch, 50.0)
+    sent = []
+
+    async def _place(**kw):
+        sent.append(kw)
+        return _reply("0x3")
+
+    monkeypatch.setattr(tt.api, "place_limit_order", _place)
+    order = {"conditionId": "0xabc", "side": "yes", "action": "buy",
+             "priceCents": 14, "size": 5, "orderType": "GTC", "postOnly": True}
+    pv = _run(tt.preview(order))
+    assert pv["postOnly"] is True and not pv["blockers"]
+    assert pv["feeUsd"] == 0.0 and pv["maxLossUsd"] == 0.70
+    assert not any("taker case" in w for w in pv["warnings"])
+    assert _run(tt.place({**order, "confirmUsd": 0.70}))["ok"] is True
+    assert sent[0]["post_only"] is True
+
+    # At the ask it would take: refused before anything is sent.
+    crossing = _run(tt.preview({**order, "priceCents": 15}))
+    assert any("Post-only" in b and "best ask of 15¢" in b for b in crossing["blockers"])
+    r = _run(tt.place({**order, "priceCents": 15, "confirmUsd": 0.75}))
+    assert r["ok"] is False and len(sent) == 1
+    # A fill-and-kill cannot rest.
+    assert any("Post-only needs a resting" in b for b in _run(tt.preview(
+        {**order, "orderType": "FAK"}))["blockers"])
+    # An ordinary ticket is sent the way it always was.
+    _run(tt.place({**order, "postOnly": False, "confirmUsd": 0.70}))
+    assert "post_only" not in sent[1]
+
+
 def test_a_filled_order_says_filled_at_the_exchanges_average(fresh_db, monkeypatch):
     """The reply carries the fill, so the sentence can state it rather than
     promise it later. The average is the exchange's, not the limit that was sent."""
@@ -375,7 +438,7 @@ def test_the_venue_call_sends_a_sub_cent_price_unrounded(monkeypatch, side, want
     monkeypatch.setattr(api, "get_open_orders", _nothing_open)
     monkeypatch.setattr(api, "_throttle", _no_wait)
     monkeypatch.setattr(api, "_authed_request", _post)
-    monkeypatch.setattr(api, "_no_side_verified", True)
+    monkeypatch.setattr(api, "_no_side_mismatch", False)
     monkeypatch.setattr(api, "_kill_reason", "")
     monkeypatch.setattr(api, "trading_restriction", lambda: None)
     _run(api.place_limit_order(ticker="cpc-abc", side=side, action="buy", count=1000,

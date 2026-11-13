@@ -55,7 +55,9 @@ describe('tour steps', () => {
     const simple = NAV_GROUPS.flatMap((g) => g.items).filter((i) => i.tier === 'simple').map((i) => i.id);
     expect(simple).toEqual(expect.arrayContaining(['scripts', 'backtest', 'discover', 'strategies', 'agents']));
     expect([...SIMPLE_PAGES].sort()).toEqual([...simple].sort());
-  });
+    // Importing App compiles every page. Alone that takes about a second; in a
+    // full run on a busy machine it passed the 5s default two times in three.
+  }, 30_000);
 
   it('visits the sidebar tabs first, in exactly the sidebar order, then the status steps', async () => {
     const { NAV_GROUPS } = await import('../src/components/Sidebar');

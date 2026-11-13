@@ -23,6 +23,7 @@ import json
 import logging
 import math
 import os
+import re
 import time
 import uuid
 from datetime import datetime, timezone
@@ -77,17 +78,24 @@ _last_net_ok = 0.0               # monotonic of last response; 0 = none yet
 _NET_STALL_SECS = 45.0           # only rebuild after a REAL stall this long
 
 # Throttle for repeated "GET failed" lines. A burst produced dozens of identical
-# lines/second; log at most one per URL per window and let the rest stay quiet.
+# lines/second; log at most one per endpoint per window and let the rest stay
+# quiet. Per endpoint, not per URL: every market window has its own slug, so a
+# network drop logged one line for each of them (16 a second, live 2026-11-07).
 _get_fail_log_at: dict = {}
 _GET_FAIL_LOG_GAP = 30.0
 
 
+def _get_fail_key(url: str) -> str:
+    return re.sub(r"/slug/.*$", "/slug/*", str(url).split("?", 1)[0])
+
+
 def _log_get_failed(url: str, e: Exception) -> None:
     now = time.monotonic()
-    last = _get_fail_log_at.get(url)
+    key = _get_fail_key(url)
+    last = _get_fail_log_at.get(key)
     if last is not None and now - last < _GET_FAIL_LOG_GAP:
         return
-    _get_fail_log_at[url] = now
+    _get_fail_log_at[key] = now
     # Include the exception TYPE: httpx network errors often stringify to ""
     # (thousands of reasonless 'GET failed' lines in user logs).
     logger.warning(f"GET failed {url}: {type(e).__name__}: {e}")
@@ -725,6 +733,12 @@ async def _read_bbo(slug: str) -> tuple[Optional[float], Optional[float], Option
             if ask is None and book["asks"]:
                 ask = book["asks"][0][0]
             age = max(age or 0.0, book_age or 0.0)
+        elif bid is None and ask is None:
+            # No quote on the row and no book: nothing was read. Answering with an
+            # age here said "an empty book, read just now", and a buy then went out
+            # with no price to collar it against. A new window is exactly where
+            # this happens: its row has no quotes and its book isn't served yet.
+            return None, None, None
     return bid, ask, age
 
 
@@ -1160,12 +1174,16 @@ COLLAR_FRESH_SEC = 5.0              # a REST reply younger than this counts as l
 _order_times: collections.deque = collections.deque()
 _throttle_lock = asyncio.Lock()
 _kill_reason = ""
-# Whether the exchange has been seen to read a NO order's price on the YES side.
-# Until then a BUY of NO is refused: if the convention were the other way round, a
-# marketable NO buy could pay far above the price it was given. A wrong convention
-# on a SELL of NO only leaves it unfilled, so exits are not held back. Set only by
-# the owner's live check, kept per API key (another key may be another account).
-_no_side_verified = False
+# The exchange reads a NO order's price on the YES side. Its docs say so, the
+# owner's live check saw it on the wire (2026-11-04), and real NO buys have filled
+# at or under their limit since. That is a fact about the venue, not about a key or
+# a machine, so NO buys are open on every install. (They used to need the live
+# check per key, which an installed build can't run, so nobody else could buy NO.)
+# This latch is what is left: the live check sets it if it ever sees the exchange
+# read the price the other way, because a marketable NO buy could then pay far
+# above the price it was given. A wrong reading on a SELL of NO only leaves it
+# unfilled, so exits are never held back.
+_no_side_mismatch = False
 
 
 # Both safety latches survive a restart: a kill switch that a crash-respawn quietly
@@ -1192,12 +1210,11 @@ def _write_venue_state(**changes) -> None:
 
 
 def load_venue_state() -> None:
-    """Restore the latches for the saved key. Runs at startup and on a key change."""
-    global _kill_reason, _no_side_verified
+    """Restore the latches. Runs at startup and on a key change."""
+    global _kill_reason, _no_side_mismatch
     state = _read_venue_state()
     _kill_reason = str(state.get("killSwitch") or "")
-    key_id = auth.get_key_id() if auth.credentials_present() else ""
-    _no_side_verified = bool(key_id) and state.get("noSideVerifiedKey") == key_id
+    _no_side_mismatch = state.get("noSideMismatch") is True
 
 
 def engage_kill_switch(reason: str = "kill switch") -> None:
@@ -1219,11 +1236,16 @@ def kill_switch_status() -> Optional[str]:
     return _kill_reason or None
 
 
-def set_no_side_verified(value: bool) -> None:
-    """Only the owner's live check calls this, with what it observed on the wire."""
-    global _no_side_verified
-    _no_side_verified = bool(value)
-    _write_venue_state(noSideVerifiedKey=auth.get_key_id() if value else "")
+def set_no_side_mismatch(value: bool) -> None:
+    """Only the live check calls this, with what it observed on the wire: True
+    locks NO buys, False clears the lock."""
+    global _no_side_mismatch
+    _no_side_mismatch = bool(value)
+    _write_venue_state(noSideMismatch=_no_side_mismatch)
+
+
+def no_buy_locked() -> bool:
+    return _no_side_mismatch
 
 
 async def _throttle() -> None:
@@ -1278,7 +1300,8 @@ def collar_refusal(action: str, price_cents: float, bid: Optional[float], ask: O
 
 
 async def place_limit_order(*, ticker: str, side: str, action: str, count: int, price_cents: float,
-                            client_order_id: Optional[str] = None, order_type: str = "GTC") -> dict:
+                            client_order_id: Optional[str] = None, order_type: str = "GTC",
+                            post_only: bool = False) -> dict:
     """Send one limit order for a side of a market.
 
     `price_cents` is the price of `side`: buying NO at 30 means paying 30c for NO.
@@ -1286,6 +1309,10 @@ async def place_limit_order(*, ticker: str, side: str, action: str, count: int, 
 
     `order_type`: "GTC" rests; "FAK"/"FOK" cross and kill the remainder, sent as a
     limit + IOC/FOK, so `price_cents` is a hard cap either way.
+
+    `post_only` (GTC only) sends the order as participate-don't-initiate: the
+    exchange rests it or rejects it, and never lets it take. A maker fill pays no
+    fee, so this is how a resting order is guaranteed not to pay one.
 
     `client_order_id` is local correlation only, stored on our row and never sent:
     the API has no client id or idempotency key. So a lost reply can't be retried
@@ -1299,6 +1326,8 @@ async def place_limit_order(*, ticker: str, side: str, action: str, count: int, 
         raise ValueError(f"side must be yes|no, got {side}")
     if action not in ("buy", "sell"):
         raise ValueError(f"action must be buy|sell, got {action}")
+    if post_only and order_type != "GTC":
+        raise ValueError(f"post_only needs a GTC order, got {order_type}")
     if not (0 < price_cents < 100):
         raise ValueError(f"price_cents must be inside 0..100, got {price_cents}")
     if count <= 0:
@@ -1308,10 +1337,10 @@ async def place_limit_order(*, ticker: str, side: str, action: str, count: int, 
 
     if _kill_reason:
         raise LocalOrderRefusal(423, f"Kill switch is on ({_kill_reason}). Nothing was sent.")
-    if side == "no" and action == "buy" and not _no_side_verified:
+    if side == "no" and action == "buy" and _no_side_mismatch:
         raise LocalOrderRefusal(
-            412, "Buying NO is locked until the live check has confirmed how the exchange "
-                 "prices NO orders. Run `npm run py:orders`. Nothing was sent.")
+            412, "Buying NO is locked: the live check saw the exchange price a NO order "
+                 "differently from how this app sends it. Update the app. Nothing was sent.")
     restriction = trading_restriction()
     if restriction is not None:
         raise EngineRestartError(425, restriction["message"])
@@ -1347,9 +1376,20 @@ async def place_limit_order(*, ticker: str, side: str, action: str, count: int, 
                                  COLLAR_CACHED_CENTS if wide else COLLAR_LIVE_CENTS)
     if why:
         raise LocalOrderRefusal(422, why)
+    if post_only:
+        # Refused here with the price that would have been hit. The exchange
+        # refuses it too, for a touch that moved after this read.
+        touch = ask if action == "buy" else bid
+        crosses = touch is not None and (
+            price * 100.0 >= touch - 1e-9 if action == "buy" else price * 100.0 <= touch + 1e-9)
+        if crosses:
+            raise LocalOrderRefusal(
+                422, f"Post-only: {price * 100.0:g}¢ would trade right away against the best "
+                     f"{'ask' if action == 'buy' else 'bid'} of {touch:g}¢, and a post-only "
+                     f"order may only rest. Nothing was sent.")
 
     body = us.order_body(slug=ticker, side=side, action=action, count=count, price=price,
-                         order_type=order_type)
+                         order_type=order_type, maker_only=post_only)
     direction = us.yes_book_direction(body["intent"])
     try:
         mine = await get_open_orders([ticker])
@@ -1383,6 +1423,10 @@ async def place_limit_order(*, ticker: str, side: str, action: str, count: int, 
     if parsed["reject"]:
         if order_type in ("FOK", "FAK") and us.is_no_liquidity(parsed["reject"]):
             return {"order": {"order_id": "", "status": "unmatched"}, "raw": resp}
+        if post_only:
+            raise PolymarketAPIError(
+                400, f"The exchange did not place this post-only order ({parsed['reject']}). "
+                     f"It would have traded right away. Nothing was placed.")
         raise PolymarketAPIError(400, parsed["reject"])
     return {"order": {"order_id": parsed["order_id"], "status": parsed["status"]}, "raw": resp}
 

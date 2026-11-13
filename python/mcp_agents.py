@@ -275,6 +275,10 @@ def effective_rails(global_rails: dict, agent: Optional[dict]) -> dict:
             out[k] = float(r[k]) if g <= 0 else min(g, float(r[k]))
     if r.get("minEdgeCents") is not None:
         out["minEdgeCents"] = max(out["minEdgeCents"], float(r["minEdgeCents"]))
+        # An agent's own minimum is a floor under every buy it makes.
+        if out.get("minEdgeRestingCents") is not None:
+            out["minEdgeRestingCents"] = max(out["minEdgeRestingCents"],
+                                             float(r["minEdgeCents"]))
     return out
 
 
@@ -420,6 +424,9 @@ def rules_summary(agent: dict, rails: dict, mode: str) -> list[str]:
             out.append(f"At most {r['maxOpenPositions']} open positions of its own.")
     out.append(f"Minimum edge after Polymarket's fee: {rails['minEdgeCents']:g}¢ per "
                f"share against its own forecast.")
+    if rails.get("minEdgeRestingCents") is not None:
+        out.append(f"A post-only buy (postOnly=true: it rests, never takes, pays no "
+                   f"fee) needs {rails['minEdgeRestingCents']:g}¢ instead.")
     out.append(f"Money caps: {_money(rails['maxOrderUsd'])} per order, "
                f"{_money(rails['dailySpendUsd'])} per UTC day.")
     out.append({"off": "Trading is OFF: it can read markets and record forecasts only.",

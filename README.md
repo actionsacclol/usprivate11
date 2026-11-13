@@ -65,8 +65,7 @@ The app's own **Guide** page covers each feature. `docs/` still describes the or
 - **The app starts on Paper** — nothing real is sent until you go Live from a checklist that tests your API key and lists everything that will start spending.
 - **Every engine starts off** — crypto and live scripts each have their own switch, and nothing trades until you turn one on.
 - **Breakers on the engines** — daily stop-loss / take-profit, a lifetime drawdown breaker, trading-hours windows and a pause-everything switch (also from your phone with `/pause`).
-- **Order checks in the backend** — a kill switch, an order throttle, a price collar and a self-cross refusal. Buying NO stays locked until the live check has passed.
-- **Your API key is encrypted at rest** on Windows (DPAPI), tied to your user account, and only ever used to sign requests locally.
+- **Order checks in the backend** — a kill switch, an order throttle, a price collar and a self-cross refusal.- **Your API key is encrypted at rest** on Windows (DPAPI), tied to your user account, and only ever used to sign requests locally.
 - **New scripts start in shadow mode** — they record what they *would* have traded until you explicitly arm them.
 - **A fee-aware backtest** (`npm run py:backtest`) measures the net-of-fee result on *your own* recorded data. Run it before trusting any setting.
 - **AI agents are fenced in by the backend, not by their prompt** — trade mode, caps, a daily loss stop, forecast-before-buy and approvals are enforced on every order, whatever the agent says. Agents start on paper, and whole-account powers are a separate switch, off by default.

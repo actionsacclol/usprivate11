@@ -399,6 +399,30 @@ def test_transfer_recorded_per_run_and_adjusts_session(fresh_db):
         assert db.transfer_adjustment_run(conn, ENV, 0) == 0.0
 
 
+def test_a_withdrawal_is_not_a_trading_loss_in_the_runs_own_pnl(fresh_db):
+    """Live 2026-11-08, run 2: $58.01 to $20.23 with $25.39 withdrawn was stored
+    as −$37.78. The run lost $12.39."""
+    with db.get_db() as conn:
+        db.insert_pnl_snapshot(conn, cash_usd=41.40, portfolio_usd=0.0,
+                               realized_pnl_usd=0.0, wins=0, losses=0,
+                               open_positions=0, env=ENV)
+        run_id = db.start_bot_run(conn, env=ENV, cash_usd=58.01, portfolio_usd=0.0)
+        db.kv_set(conn, f"transfers_run:{ENV}:{run_id}", repr(-25.39))
+        db.heartbeat_bot_run(conn, run_id, cash_usd=20.23, portfolio_usd=0.0)
+        [row] = db.get_recent_runs(conn, env=ENV)
+        assert row["pnl_usd"] == pytest.approx(-12.39)
+        # A row stored before transfers were netted reads right as well.
+        conn.execute("UPDATE bot_runs SET pnl_usd = end_total_usd - start_total_usd")
+        [row] = db.get_recent_runs(conn, env=ENV)
+        assert row["pnl_usd"] == pytest.approx(-37.78)
+        assert db.run_pnl(conn, row) == pytest.approx(-12.39)
+        # A run with no transfers is just its balance change.
+        other = db.start_bot_run(conn, env=ENV, cash_usd=10.0, portfolio_usd=0.0)
+        db.heartbeat_bot_run(conn, other, cash_usd=12.5, portfolio_usd=0.0)
+        fresh = next(r for r in db.get_recent_runs(conn, env=ENV) if r["id"] == other)
+        assert fresh["pnl_usd"] == pytest.approx(2.5) and db.run_pnl(conn, fresh) == pytest.approx(2.5)
+
+
 # ── the all-time baseline survives snapshot pruning ──
 
 def _snap_at(conn, total, days_ago, env=ENV):

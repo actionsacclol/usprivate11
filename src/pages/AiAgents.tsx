@@ -456,6 +456,11 @@ export function AiAgentsPage({ onNav }: { onNav?: (p: PageId) => void } = {}) {
                 <NumberInput suffix="¢" value={config?.mcpMinEdgeCents ?? 3} min={0} max={50}
                   onChange={(v) => void patch({ mcpMinEdgeCents: v })} />
               </Rail>
+              <Rail label="Minimum edge, post-only"
+                hint="For a buy sent post-only: it can only rest, so it pays no fee. Resting bids tend to fill when the price is moving against them, so this starts higher.">
+                <NumberInput suffix="¢" value={config?.mcpMinEdgeRestingCents ?? 5} min={0} max={50}
+                  onChange={(v) => void patch({ mcpMinEdgeRestingCents: v })} />
+              </Rail>
               <Rail label="Daily loss stop"
                 hint={(() => {
                   const loss = s?.lossToday?.lossUsd ?? s?.lossTodayUsd;
